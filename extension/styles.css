@@ -1,0 +1,29 @@
+[data-truth-tone-card] {
+  all: initial;
+  position: fixed;
+  box-sizing: border-box;
+  z-index: 2147483000;
+  display: block;
+  padding: 14px;
+  border: 1px solid #cbd8e3;
+  border-radius: 12px;
+  color: #17233b;
+  background: #ffffff;
+  box-shadow: 0 10px 32px rgba(20, 40, 65, 0.22);
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 13px;
+  line-height: 1.45;
+  text-align: left;
+}
+[data-truth-tone-card] *, [data-truth-tone-card] *::before, [data-truth-tone-card] *::after { box-sizing: border-box; }
+[data-truth-tone-card] strong { display: block; margin: 0 0 8px; color: #8a4d10; font-size: 13px; font-weight: 750; }
+[data-truth-tone-card] .ttg-heading { display: block; margin-top: 9px; color: #5f6b7d; font-size: 11px; font-weight: 700; letter-spacing: .02em; text-transform: uppercase; }
+[data-truth-tone-card] p { margin: 5px 0 10px; color: #27364d; font: inherit; }
+[data-truth-tone-card] .ttg-loading { margin: 0; color: #3d6070; }
+[data-truth-tone-card] .ttg-suggestion { padding: 9px 10px; border-radius: 8px; background: #f2f7f8; }
+[data-truth-tone-card] .ttg-actions { display: flex; flex-wrap: wrap; gap: 7px; justify-content: flex-end; margin-top: 10px; }
+[data-truth-tone-card] .ttg-button { all: initial; border-radius: 7px; padding: 7px 11px; font-family: inherit; font-size: 12px; font-weight: 700; cursor: pointer; }
+[data-truth-tone-card] .ttg-button:focus-visible { outline: 3px solid #8fd5dc; outline-offset: 2px; }
+[data-truth-tone-card] .ttg-primary { color: #fff; background: #176b77; }
+[data-truth-tone-card] .ttg-secondary { color: #155b65; background: #e2f2f3; }
+[data-truth-tone-card] .ttg-quiet { color: #5f6b7d; background: transparent; }

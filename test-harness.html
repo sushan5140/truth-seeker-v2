@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Truth &amp; Tone Guardian automated harness</title>
+  <link rel="stylesheet" href="extension/styles.css">
+</head>
+<body>
+  <label for="neutral">Textarea</label>
+  <textarea id="neutral"></textarea>
+  <label for="plain-input">Text input</label>
+  <input id="plain-input" type="text">
+  <div id="chatgpt-like" contenteditable="true" role="textbox" aria-label="Message ChatGPT"></div>
+  <button id="send" type="button" aria-label="Send prompt">Send</button>
+  <div id="submission-count">0</div>
+  <script>
+    globalThis.chrome = {
+      runtime: {
+        lastError: null,
+        onMessage: { addListener() {} },
+        sendMessage(message, callback) {
+          if (message.type === 'CANCEL_TONE') return;
+          fetch('http://127.0.0.1:8000/api/check-tone', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ text: message.text }),
+          })
+            .then(async (response) => callback({ ok: response.ok, data: await response.json() }))
+            .catch(() => callback({ ok: false, error: 'The local tone service is unavailable.' }));
+        },
+      },
+    };
+    document.querySelector('#send').addEventListener('click', () => {
+      const count = document.querySelector('#submission-count');
+      count.textContent = String(Number(count.textContent) + 1);
+    });
+  </script>
+  <script src="extension/content.js"></script>
+</body>
+</html>

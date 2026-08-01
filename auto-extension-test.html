@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>TruthTone pending</title></head>
+<body>
+  <label for="test-editor">Automatic extension test editor</label>
+  <textarea id="test-editor"></textarea>
+  <p id="result">Waiting for extension…</p>
+  <script>
+    setTimeout(() => {
+      const editor = document.querySelector('#test-editor');
+      editor.focus();
+      editor.value = 'This idea is stupid and completely useless.';
+      editor.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText' }));
+      editor.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, key: '.' }));
+    }, 500);
+    setTimeout(() => {
+      const card = document.querySelector('[data-truth-tone-card]');
+      const passed = Boolean(card?.textContent.includes('Suggested rewrite'));
+      document.title = passed ? 'TruthTone PASS' : 'TruthTone FAIL';
+      document.querySelector('#result').textContent = document.title;
+    }, 5000);
+  </script>
+</body>
+</html>

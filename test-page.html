@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Truth &amp; Tone Guardian Editor Test</title>
+  <style>
+    body { max-width: 760px; margin: 40px auto; padding: 0 20px; color: #18243a; font-family: system-ui, sans-serif; }
+    .editor { display: block; width: 100%; min-height: 72px; margin: 8px 0 26px; padding: 12px; border: 1px solid #9cabc0; border-radius: 8px; font: inherit; }
+    [contenteditable] { min-height: 100px; }
+    button { padding: 10px 15px; border: 0; border-radius: 7px; color: white; background: #176b77; }
+  </style>
+</head>
+<body>
+  <h1>In-page Tone Guard test</h1>
+  <p>Try a neutral sentence, then try: <strong>This idea is nuts and will never work.</strong></p>
+  <label for="textarea">Textarea</label>
+  <textarea id="textarea" class="editor" placeholder="Type a message"></textarea>
+  <label for="text-input">Text input</label>
+  <input id="text-input" class="editor" type="text" placeholder="Type a short message">
+  <label for="rich-editor">Contenteditable editor</label>
+  <div id="rich-editor" class="editor" contenteditable="true" role="textbox" aria-label="Test editor"></div>
+  <button id="post-button" type="button">Post</button>
+  <p id="post-status" aria-live="polite"></p>
+  <script>
+    document.querySelector('#post-button').addEventListener('click', () => {
+      document.querySelector('#post-status').textContent = 'The test page received the click. Nothing was sent.';
+    });
+  </script>
+</body>
+</html>
