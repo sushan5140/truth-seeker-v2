@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Truth & Tone Guardian</title>
+  <title>Truth &amp; Tone Guardian</title>
   <link rel="stylesheet" href="popup.css">
 </head>
 <body>
@@ -18,44 +18,32 @@
   <main>
     <section class="connection-card" aria-label="Backend connection status">
       <div><span id="connection-dot" class="connection-dot checking"></span><strong id="connection-status">Checking backend…</strong></div>
-      <div class="connection-details">
-        <span id="gemini-status">Gemini: checking</span>
-        <span id="fallback-status">Local fallback: checking</span>
-      </div>
+      <div class="connection-details"><span id="gemini-status">Gemini: checking</span><span id="fallback-status">Local fallback: checking</span></div>
       <button id="diagnostic-button" class="diagnostic-button" type="button">Test backend connection</button>
       <pre id="diagnostic-results" class="diagnostic-results hidden" aria-live="polite"></pre>
     </section>
     <section class="settings-card" aria-label="Tone Guard settings">
-      <div class="setting-row">
-        <label for="automatic-tone-guard">Automatic Tone Guard</label>
-        <select id="automatic-tone-guard">
-          <option value="on">On</option>
-          <option value="off">Off</option>
-        </select>
-      </div>
-      <div class="setting-row">
-        <label for="tone-sensitivity">Sensitivity</label>
-        <select id="tone-sensitivity">
-          <option value="low">Low</option>
-          <option value="balanced">Balanced</option>
-          <option value="high">High</option>
-        </select>
-      </div>
+      <div class="setting-row"><label for="automatic-tone-guard">Automatic Tone Guard</label><select id="automatic-tone-guard"><option value="on">On</option><option value="off">Off</option></select></div>
+      <div class="setting-row"><label for="tone-sensitivity">Sensitivity</label><select id="tone-sensitivity"><option value="low">Low</option><option value="balanced">Balanced</option><option value="high">High</option></select></div>
       <p id="settings-status" class="settings-status" role="status"></p>
     </section>
     <div id="privacy-notice" class="warning hidden">
-      <strong>Tone analysis uses Gemini and sends the text being checked to Google’s Gemini API.</strong>
+      <strong>Tone analysis and evidence comparison use Gemini and send the text being checked to Google’s Gemini API.</strong>
       <button id="privacy-dismiss" class="notice-button" type="button">Got it</button>
     </div>
     <section id="claim-panel" class="panel">
-      <div class="warning"><strong>This prototype does not perform real fact-checking yet.</strong><br>“Unverified” never means false.</div>
+      <div class="warning"><strong>Claim checks are manual and evidence-limited.</strong><br>Insufficient evidence never means false.</div>
       <label for="claim-text">Claim to check</label>
-      <textarea id="claim-text" maxlength="5000" placeholder="Highlight text on a webpage, or type a claim here."></textarea>
+      <textarea id="claim-text" maxlength="5000" placeholder="Highlight a factual claim on a webpage, or type it here."></textarea>
       <div class="row"><span id="claim-count">0 / 5,000</span><button id="claim-button">Check Claim</button></div>
       <div id="claim-status" class="status" role="status"></div>
       <div id="claim-result" class="result hidden">
         <div class="result-title"><span id="claim-badge" class="badge"></span><span id="claim-confidence"></span></div>
-        <p id="claim-explanation"></p><p id="claim-limitations" class="muted"></p>
+        <p id="claim-checked-text"></p><p id="claim-summary"></p>
+        <div id="claim-evidence"></div>
+        <strong>Limitations</strong><ul id="claim-limitations" class="muted"></ul>
+        <p id="claim-certainty" class="certainty-note"></p><p id="claim-checked-at" class="muted"></p>
+        <button id="claim-copy" class="secondary" type="button">Copy Result</button>
       </div>
     </section>
     <section id="tone-panel" class="panel hidden">
@@ -66,15 +54,12 @@
       <div id="tone-status" class="status" role="status"></div>
       <div id="tone-result" class="result hidden">
         <div class="result-title"><span id="tone-badge" class="badge"></span></div>
-        <p><strong>Flagged phrase:</strong> <span id="tone-phrase"></span></p>
-        <p id="tone-explanation"></p>
-        <label for="tone-suggestion">Suggested rewrite</label>
-        <textarea id="tone-suggestion" readonly></textarea>
+        <p><strong>Flagged phrase:</strong> <span id="tone-phrase"></span></p><p id="tone-explanation"></p>
+        <label for="tone-suggestion">Suggested rewrite</label><textarea id="tone-suggestion" readonly></textarea>
         <button id="copy-button" class="secondary">Copy Suggestion</button>
       </div>
     </section>
   </main>
-  <script src="../settings.js"></script>
-  <script src="popup.js"></script>
+  <script src="../settings.js"></script><script src="popup.js"></script>
 </body>
 </html>

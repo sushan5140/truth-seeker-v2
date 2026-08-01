@@ -5,3 +5,5 @@ __pycache__/
 .pytest_cache/
 *.py[cod]
 work/
+backend/data/*.sqlite3
+backend/data/*.sqlite3-*

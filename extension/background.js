@@ -2,6 +2,9 @@ const EXTENSION_VERSION = chrome.runtime.getManifest().version;
 const PRIMARY_BACKEND = "http://127.0.0.1:8000";
 const LOCALHOST_BACKEND = "http://localhost:8000";
 const REQUEST_TIMEOUT_MS = 10_000;
+const CLAIM_TIMEOUT_MS = 22_000;
+const claimControllers = new Map();
+const recentClaimResponses = new Map();
 
 chrome.runtime.onInstalled.addListener(async () => {
   const saved = await chrome.storage.local.get(["automaticToneGuard", "toneSensitivity"]);
@@ -24,9 +27,9 @@ function failure(code, message, details = {}) {
   return { ok: false, code, error: message, ...details };
 }
 
-async function fetchJson(url, options = {}) {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+async function fetchJson(url, options = {}, timeoutMs = REQUEST_TIMEOUT_MS, suppliedController = null) {
+  const controller = suppliedController || new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const response = await fetch(url, { ...options, signal: controller.signal });
     let data;
@@ -79,25 +82,94 @@ async function checkTone(text, sensitivity = "balanced") {
   return { ok: true, data };
 }
 
+function safeSourceUrl(value) {
+  try {
+    const url = new URL(value);
+    if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) return null;
+    const host = url.hostname.toLowerCase();
+    if (host === 'localhost' || host.endsWith('.localhost') || /^127\.|^10\.|^192\.168\.|^169\.254\.|^0\./.test(host) || host === '::1') return null;
+    return url.href;
+  } catch (_error) {
+    return null;
+  }
+}
+
+async function checkClaim(message) {
+  const text = typeof message.text === "string" ? message.text.trim() : "";
+  if (text.length < 12 || text.length > 5000) return failure("INVALID_CLAIM", "Select a factual claim between 12 and 5,000 characters.");
+  const requestId = message.requestId || crypto.randomUUID();
+  const cacheKey = text.toLowerCase().replace(/\s+/g, " ");
+  const recent = recentClaimResponses.get(cacheKey);
+  if (!message.bypassCache && recent && Date.now() - recent.savedAt < 30_000) return { ok: true, data: recent.data };
+
+  const controller = new AbortController();
+  claimControllers.set(requestId, controller);
+  try {
+    const result = await fetchJson(`${PRIMARY_BACKEND}/api/check-claim`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        text,
+        source_url: message.sourceUrl || null,
+        page_title: message.pageTitle || null,
+        language: message.language || "en",
+        bypass_cache: message.bypassCache === true,
+      }),
+    }, CLAIM_TIMEOUT_MS, controller);
+    if (!result.ok) return result;
+    if (!result.data || typeof result.data.verdict !== "string" || !Array.isArray(result.data.evidence)) {
+      return failure("INVALID_CLAIM_RESPONSE", "The claim endpoint returned an unexpected response.");
+    }
+    recentClaimResponses.set(cacheKey, { savedAt: Date.now(), data: result.data });
+    return { ok: true, data: result.data };
+  } finally {
+    claimControllers.delete(requestId);
+  }
+}
+
 async function runSelfTest() {
   const health127 = await fetchJson(`${PRIMARY_BACKEND}/health`);
   const healthLocalhost = await fetchJson(`${LOCALHOST_BACKEND}/health`);
+  const truthStatus = await fetchJson(`${PRIMARY_BACKEND}/api/truth/status`);
   const tone = await checkTone("This idea is stupid and completely useless.", "balanced");
   return {
-    ok: health127.ok && healthLocalhost.ok && tone.ok,
+    ok: health127.ok && healthLocalhost.ok && truthStatus.ok && tone.ok,
     extensionVersion: EXTENSION_VERSION,
     backgroundWorkerReachable: true,
     health127: { ok: health127.ok, status: health127.status ?? null, code: health127.code ?? null },
     healthLocalhost: { ok: healthLocalhost.ok, status: healthLocalhost.status ?? null, code: healthLocalhost.code ?? null },
     toneEndpoint: { ok: tone.ok, code: tone.code ?? null },
+    truthStatus: truthStatus.ok ? truthStatus.data : { ok: false, code: truthStatus.code },
     provider: tone.ok ? tone.data.provider : null,
-    errorCode: health127.code || healthLocalhost.code || tone.code || null,
+    errorCode: health127.code || healthLocalhost.code || truthStatus.code || tone.code || null,
   };
 }
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message?.type === "CHECK_TONE") {
     checkTone(message.text, message.sensitivity).then(sendResponse).catch(() => sendResponse(failure("WORKER_ERROR", "The background worker failed.")));
+    return true;
+  }
+  if (message?.type === "CHECK_CLAIM") {
+    checkClaim(message).then(sendResponse).catch((error) => {
+      const code = error?.name === "AbortError" ? "CLAIM_CANCELLED" : "CLAIM_WORKER_ERROR";
+      sendResponse(failure(code, code === "CLAIM_CANCELLED" ? "Claim check cancelled." : "The claim check failed."));
+    });
+    return true;
+  }
+  if (message?.type === "CANCEL_CLAIM") {
+    claimControllers.get(message.requestId)?.abort();
+    claimControllers.delete(message.requestId);
+    sendResponse({ ok: true });
+    return false;
+  }
+  if (message?.type === "OPEN_SOURCE") {
+    const safeUrl = safeSourceUrl(message.url);
+    if (!safeUrl) {
+      sendResponse(failure("UNSAFE_SOURCE_URL", "The source URL was blocked."));
+      return false;
+    }
+    chrome.tabs.create({ url: safeUrl }).then(() => sendResponse({ ok: true })).catch(() => sendResponse(failure("OPEN_SOURCE_FAILED", "The source could not be opened.")));
     return true;
   }
   if (message?.type === "RUN_BACKEND_SELF_TEST") {

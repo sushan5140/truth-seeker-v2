@@ -27,3 +27,27 @@
 [data-truth-tone-card] .ttg-primary { color: #fff; background: #176b77; }
 [data-truth-tone-card] .ttg-secondary { color: #155b65; background: #e2f2f3; }
 [data-truth-tone-card] .ttg-quiet { color: #5f6b7d; background: transparent; }
+
+[data-truth-tone-claim-action], [data-truth-tone-claim-card] { position: fixed !important; z-index: 2147483647 !important; box-sizing: border-box !important; font-family: Inter, system-ui, -apple-system, sans-serif !important; }
+[data-truth-tone-claim-action] { width: auto !important; padding: 7px 11px !important; border: 0 !important; border-radius: 999px !important; color: white !important; background: #176b77 !important; box-shadow: 0 5px 18px rgba(20,45,70,.25) !important; font-size: 12px !important; font-weight: 700 !important; cursor: pointer !important; }
+[data-truth-tone-claim-card] { max-height: calc(100vh - 24px) !important; overflow: auto !important; padding: 15px !important; border: 1px solid #cfd9e5 !important; border-radius: 12px !important; color: #17233b !important; background: #fff !important; box-shadow: 0 12px 34px rgba(19,39,65,.24) !important; font-size: 13px !important; line-height: 1.45 !important; }
+[data-truth-tone-claim-card] p { margin: 8px 0 !important; }
+[data-truth-tone-claim-card] ul { margin: 7px 0 10px 20px !important; padding: 0 !important; }
+[data-truth-tone-claim-card] code { display: block !important; margin: 8px 0 !important; color: #6a3540 !important; }
+.ttg-claim-header { display: flex !important; justify-content: space-between !important; align-items: center !important; gap: 10px !important; margin-bottom: 9px !important; }
+.ttg-claim-verdict { padding: 5px 9px !important; border-radius: 999px !important; background: #dceff1 !important; color: #15545d !important; }
+.ttg-verdict-contradicted { background: #f8dfdc !important; color: #8c332b !important; }
+.ttg-verdict-mixed { background: #fff0c7 !important; color: #775a0a !important; }
+.ttg-verdict-insufficient_evidence, .ttg-verdict-opinion, .ttg-verdict-invalid { background: #edf0f4 !important; color: #4d5b6e !important; }
+.ttg-claim-checked { padding-left: 9px !important; border-left: 3px solid #62a6ad !important; font-weight: 650 !important; }
+.ttg-claim-source { margin: 8px 0 !important; padding: 10px !important; border: 1px solid #dbe3ec !important; border-radius: 9px !important; background: #f8fafc !important; }
+.ttg-claim-source > span { display: block !important; margin-top: 3px !important; color: #627087 !important; font-size: 11px !important; }
+.ttg-claim-source > p { color: #334258 !important; }
+.ttg-claim-link { padding: 5px 8px !important; border: 0 !important; border-radius: 6px !important; color: #17636f !important; background: #dff0f2 !important; font-weight: 700 !important; cursor: pointer !important; }
+.ttg-claim-no-evidence { padding: 9px !important; border-radius: 8px !important; color: #4d5b6e !important; background: #f0f2f5 !important; }
+.ttg-claim-notice { padding: 9px !important; border-radius: 8px !important; color: #614b12 !important; background: #fff7dc !important; font-size: 12px !important; }
+.ttg-claim-meta { color: #68758a !important; font-size: 11px !important; }
+.ttg-claim-actions { display: flex !important; flex-wrap: wrap !important; gap: 7px !important; margin-top: 11px !important; }
+.ttg-claim-primary, .ttg-claim-secondary { padding: 7px 10px !important; border: 0 !important; border-radius: 7px !important; font-weight: 700 !important; cursor: pointer !important; }
+.ttg-claim-primary { color: white !important; background: #176b77 !important; }
+.ttg-claim-secondary { color: #17636f !important; background: #e4f1f2 !important; }

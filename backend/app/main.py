@@ -3,17 +3,17 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from app.models import ClaimResponse, TextRequest, ToneRequest, ToneResponse
-from app.services.claim_checker import check_claim
+from app.models import ClaimRequest, ClaimResponse, ToneRequest, ToneResponse, TruthStatusResponse
 from app.services.tone_checker import check_tone, is_gemini_configured
+from app.services.truth.pipeline import ClaimVerificationService
 
 
-app = FastAPI(title="Truth & Tone Guardian", version="1.0.0")
+app = FastAPI(title="Truth & Tone Guardian", version="2.0.0")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
     allow_credentials=False,
-    allow_methods=["GET", "POST"],
+    allow_methods=["GET", "POST", "DELETE"],
     allow_headers=["Content-Type"],
 )
 
@@ -42,9 +42,22 @@ def health() -> dict[str, str | bool]:
     }
 
 
+truth_service = ClaimVerificationService()
+
+
+@app.get("/api/truth/status", response_model=TruthStatusResponse)
+def truth_status() -> TruthStatusResponse:
+    return truth_service.status()
+
+
 @app.post("/api/check-claim", response_model=ClaimResponse)
-def claim_endpoint(request: TextRequest) -> ClaimResponse:
-    return check_claim(request.text)
+def claim_endpoint(request: ClaimRequest) -> ClaimResponse:
+    return truth_service.check(request)
+
+
+@app.delete("/api/truth/cache")
+def clear_truth_cache() -> dict[str, int | str]:
+    return {"status": "cleared", "entries_removed": truth_service.cache.clear()}
 
 
 @app.post("/api/check-tone", response_model=ToneResponse)

@@ -5,6 +5,7 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from app.main import app
+from app import main as main_module
 from app.models import GeminiToneResult
 from app.services import tone_checker
 
@@ -19,6 +20,8 @@ def mock_gemini_by_default(monkeypatch):
         raise RuntimeError("mock Gemini unavailable")
 
     monkeypatch.setattr(tone_checker, "_generate_with_gemini", unavailable)
+    monkeypatch.setattr(main_module.truth_service.verifier, "api_key", "")
+    main_module.truth_service.cache.clear()
 
 
 def test_health_endpoint():
@@ -44,14 +47,17 @@ def test_claim_longer_than_5000_characters():
 def test_opinion_detection():
     response = client.post("/api/check-claim", json={"text": "I think summer is the best season."})
     assert response.status_code == 200
-    assert response.json()["status"] == "opinion"
+    assert response.json()["verdict"] == "opinion"
+    assert response.json()["evidence"] == []
 
 
-def test_default_unverified_result():
+def test_default_insufficient_evidence_result_without_gemini():
     response = client.post("/api/check-claim", json={"text": "The city has twelve public parks."})
+    data = response.json()
     assert response.status_code == 200
-    assert response.json()["status"] == "unverified"
-    assert "does not mean false" in response.json()["explanation"]
+    assert data["verdict"] == "insufficient_evidence"
+    assert data["provider"]["verifier"] in {"not_used", "local_fallback"}
+    assert any("not prove" in limitation.lower() or "not inferred" in limitation.lower() for limitation in data["limitations"])
 
 
 def test_hostile_phrase_detection():

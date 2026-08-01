@@ -2,12 +2,12 @@ let messageListener;
 
 globalThis.chrome = {
   runtime: {
-    getManifest: () => ({ version: "1.5.0" }),
+    getManifest: () => ({ version: "2.0.0" }),
     onInstalled: { addListener() {} },
     onMessage: { addListener(listener) { messageListener = listener; } },
   },
   storage: { local: { get: async () => ({}), set: async () => {} } },
-  tabs: { query: async () => [], reload: async () => {} },
+  tabs: { query: async () => [], reload: async () => {}, create: async () => {} },
 };
 
 await import("../background.js");
@@ -22,7 +22,7 @@ function send(message, timeout = 12_000) {
 }
 
 const diagnostic = await send({ type: "RUN_BACKEND_SELF_TEST" }, 25_000);
-if (!diagnostic.ok || !diagnostic.health127.ok || !diagnostic.healthLocalhost.ok || !diagnostic.toneEndpoint.ok) {
+if (!diagnostic.ok || !diagnostic.health127.ok || !diagnostic.healthLocalhost.ok || !diagnostic.toneEndpoint.ok || diagnostic.truthStatus?.backend_status !== "running") {
   throw new Error(`Background self-test failed: ${JSON.stringify(diagnostic)}`);
 }
 const tone = await send({ type: "CHECK_TONE", text: "This idea is stupid and completely useless.", sensitivity: "balanced" });

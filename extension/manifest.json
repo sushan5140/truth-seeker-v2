@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Truth & Tone Guardian",
-  "version": "1.5.0",
+  "version": "2.0.0",
   "description": "Local claim checking and real-time respectful tone suggestions for Microsoft Edge and Chrome.",
   "permissions": ["activeTab", "storage", "scripting"],
   "host_permissions": [
@@ -18,7 +18,7 @@
   "content_scripts": [
     {
       "matches": ["http://*/*", "https://*/*"],
-      "js": ["settings.js", "content.js"],
+      "js": ["settings.js", "content.js", "claim-content.js"],
       "css": ["styles.css"],
       "run_at": "document_idle"
     }
