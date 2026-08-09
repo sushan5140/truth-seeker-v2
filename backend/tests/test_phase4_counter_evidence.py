@@ -208,7 +208,7 @@ def test_provider_failure_is_recorded_and_not_fatal():
 
     plan = service.verify(claim.original_text).claims[0]
 
-    assert plan.provider_errors == ["supporting: offline"]
+    assert plan.provider_errors == ["supporting (round 1): offline"]
     assert len(_all_matrix_evidence(plan)) == 1
 
 
@@ -243,14 +243,18 @@ def test_duplicate_evidence_across_categories_is_collapsed_but_distinct_evidence
 
 
 def test_query_cap_limits_number_of_searches_actually_issued():
+    """max_queries_per_claim caps round 1's plan specifically. Phase 6 may
+    still add a bounded round 2 on top (covered in test_phase6_iterative_loop.py),
+    so this asserts against the round-1 plan size, not raw total provider
+    calls across both rounds."""
     claim = _factual_claim()
     settings = replace(SETTINGS, max_queries_per_claim=2)
     provider = StubEvidenceProvider()
     service = MultiClaimVerificationService(settings, claim_decomposer=StubClaimDecomposer([claim]), evidence_provider=provider)
 
-    service.verify(claim.original_text)
+    plan = service.verify(claim.original_text).claims[0]
 
-    assert len(provider.calls) == 2
+    assert len(plan.queries) == 2
 
 
 def test_default_construction_is_fully_offline():

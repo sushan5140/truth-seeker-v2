@@ -3,6 +3,17 @@ from dataclasses import dataclass
 from app.services.truth.domain import AtomicClaim, ClaimEvidenceMatrix, Evidence
 from app.services.truth.evidence_classification import EvidenceClassifier
 
+# Named so Phase 6's targeted follow-up query generation (counter_evidence.py)
+# can map specific gaps back to a category to retry, without duplicating
+# these strings by hand in a second place.
+GAP_NO_EVIDENCE = "no evidence retrieved for this claim"
+GAP_NO_CLEAR_STANCE = "no evidence clearly supports or contradicts this claim; all retrieved evidence was classified as context"
+GAP_NO_CONTRADICTING = "no contradicting evidence found despite a contradiction-oriented search"
+GAP_NO_OFFICIAL_SOURCE = "no evidence from an official-source-oriented search was retrieved"
+GAP_SINGLE_DOMAIN = "evidence lacks independent corroboration (single source domain)"
+GAP_STALE_TIME_SENSITIVE = "no up-to-date information found for this time-sensitive claim"
+GAP_NO_PUBLICATION_DATE = "no retrieved evidence includes a publication date"
+
 
 @dataclass(frozen=True)
 class SourceQualityCounts:
@@ -50,26 +61,26 @@ def _analyze_gaps(
     account of what's missing, separate from the supporting/contradicting/
     context grouping above."""
     if not evidence_items:
-        return ["no evidence retrieved for this claim"]
+        return [GAP_NO_EVIDENCE]
 
     gaps: list[str] = []
 
     if not supporting and not contradicting:
-        gaps.append("no evidence clearly supports or contradicts this claim; all retrieved evidence was classified as context")
+        gaps.append(GAP_NO_CLEAR_STANCE)
     if not contradicting:
-        gaps.append("no contradicting evidence found despite a contradiction-oriented search")
+        gaps.append(GAP_NO_CONTRADICTING)
     if not any(item.metadata.get("query_category") == "official_source" for item in evidence_items):
-        gaps.append("no evidence from an official-source-oriented search was retrieved")
+        gaps.append(GAP_NO_OFFICIAL_SOURCE)
 
     domains = {item.metadata.get("domain_group") for item in evidence_items if item.metadata.get("domain_group")}
     if len(domains) <= 1:
-        gaps.append("evidence lacks independent corroboration (single source domain)")
+        gaps.append(GAP_SINGLE_DOMAIN)
 
     if claim.time_sensitive and not any(item.metadata.get("query_category") == "newer_information" for item in evidence_items):
-        gaps.append("no up-to-date information found for this time-sensitive claim")
+        gaps.append(GAP_STALE_TIME_SENSITIVE)
 
     if not any(item.published_at for item in evidence_items):
-        gaps.append("no retrieved evidence includes a publication date")
+        gaps.append(GAP_NO_PUBLICATION_DATE)
 
     return gaps
 

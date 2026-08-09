@@ -1,8 +1,10 @@
+import time
+
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.config import SETTINGS, TruthSettings
 from app.services.truth.claim_decomposition import ClaimDecomposer
-from app.services.truth.counter_evidence import QueryPlanItem, generate_counter_evidence_queries
+from app.services.truth.counter_evidence import QueryPlanItem, generate_counter_evidence_queries, generate_followup_queries
 from app.services.truth.domain import AtomicClaim, Evidence
 from app.services.truth.evidence_classification import EvidenceClassifier, score_relevance
 from app.services.truth.evidence_matrix import build_claim_audit
@@ -26,6 +28,7 @@ class EvidenceWithProvenance(BaseModel):
     published_at: str | None
     query: str
     query_category: str
+    retrieval_round: int
     excerpt: str
     relevance_score: float
 
@@ -62,6 +65,8 @@ class ClaimVerificationPlan(BaseModel):
     location: str | None
     time_reference: str | None
     queries: list[QueryPlanItem]
+    followup_queries: list[QueryPlanItem]
+    rounds: int
     matrix: ClaimEvidenceMatrixOut
     source_quality: SourceQualitySignals
     classifier: str
@@ -82,6 +87,7 @@ def _to_evidence_out(claim: AtomicClaim, evidence: Evidence) -> EvidenceWithProv
         published_at=evidence.published_at,
         query=str(evidence.metadata.get("query", "")),
         query_category=str(evidence.metadata.get("query_category", "")),
+        retrieval_round=int(evidence.metadata.get("retrieval_round", 1)),
         excerpt=evidence.evidence_chunk,
         relevance_score=score_relevance(claim, evidence),
     )
@@ -118,10 +124,21 @@ class MultiClaimVerificationService:
         plans = [self._plan_for_claim(claim, language) for claim in claims]
         return VerifyResponse(claims=plans, multiple_claims_detected=len(claims) > 1)
 
-    def _gather_evidence(self, claim: AtomicClaim, queries: list[QueryPlanItem], language: str) -> tuple[list[Evidence], list[str]]:
+    def _gather_evidence(
+        self, claim: AtomicClaim, queries: list[QueryPlanItem], language: str, *, round_number: int, deadline: float | None = None
+    ) -> tuple[list[Evidence], list[str], bool]:
+        """Runs queries in order, tagging each result with its query/category/
+        round for provenance. If deadline (time.monotonic() cutoff) is given
+        and is reached before a query starts, remaining queries in this call
+        are skipped and timed_out=True is returned -- used for Phase 6's
+        second-round time budget; round 1 never passes a deadline."""
         gathered: list[Evidence] = []
         errors: list[str] = []
+        timed_out = False
         for item in queries:
+            if deadline is not None and time.monotonic() >= deadline:
+                timed_out = True
+                break
             context = EvidenceSearchContext(
                 claim_id=claim.claim_id,
                 language=language,
@@ -129,22 +146,49 @@ class MultiClaimVerificationService:
             )
             result = self.evidence_provider.search_sync(item.query, context)
             if not result.success:
-                errors.extend(f"{item.category}: {error.message}" for error in result.errors)
+                errors.extend(f"{item.category} (round {round_number}): {error.message}" for error in result.errors)
                 continue
             gathered.extend(
                 evidence.model_copy(
-                    update={"metadata": {**evidence.metadata, "query": item.query, "query_category": item.category}}
+                    update={
+                        "metadata": {
+                            **evidence.metadata,
+                            "query": item.query,
+                            "query_category": item.category,
+                            "retrieval_round": round_number,
+                        }
+                    }
                 )
                 for evidence in result.evidence
             )
-        return gathered, errors
+        return gathered, errors, timed_out
 
     def _plan_for_claim(self, claim: AtomicClaim, language: str) -> ClaimVerificationPlan:
         queries = generate_counter_evidence_queries(claim, self.settings)
-        gathered, errors = self._gather_evidence(claim, queries, language)
-        deduplicated = self.deduplicator.deduplicate(gathered)
+        gathered, errors, _ = self._gather_evidence(claim, queries, language, round_number=1)
+        deduplicated = self.deduplicator.deduplicate(gathered).evidence
+        audit = build_claim_audit(claim, deduplicated, self.classifier)
 
-        audit = build_claim_audit(claim, deduplicated.evidence, self.classifier)
+        # Phase 6: at most one additional, targeted retrieval round -- a hard
+        # cap by construction (a single "if", not a loop), never a second
+        # attempt at a second attempt.
+        followup_queries = generate_followup_queries(claim, audit.matrix.unresolved)
+        rounds = 1
+        if followup_queries:
+            rounds = 2
+            deadline = time.monotonic() + self.settings.second_round_timeout_seconds
+            round2_evidence, round2_errors, timed_out = self._gather_evidence(
+                claim, followup_queries, language, round_number=2, deadline=deadline
+            )
+            errors.extend(round2_errors)
+            if timed_out:
+                errors.append("round 2: timed out before all targeted follow-up queries could run")
+            if round2_evidence:
+                deduplicated = self.deduplicator.deduplicate(gathered + round2_evidence).evidence
+                audit = build_claim_audit(claim, deduplicated, self.classifier)
+            # If round 2 produced nothing new (failed/timed out/all duplicates),
+            # the round-1 audit stands -- unresolved gaps are returned as-is,
+            # never as an error.
 
         matrix_out = ClaimEvidenceMatrixOut(
             supporting=[_to_evidence_out(claim, item) for item in audit.matrix.supporting],
@@ -163,6 +207,8 @@ class MultiClaimVerificationService:
             location=claim.location,
             time_reference=claim.time_reference,
             queries=queries,
+            followup_queries=followup_queries,
+            rounds=rounds,
             matrix=matrix_out,
             source_quality=SourceQualitySignals(
                 total_evidence=audit.source_quality.total_evidence,
