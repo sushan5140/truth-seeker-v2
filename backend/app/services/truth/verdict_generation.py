@@ -94,6 +94,18 @@ def _classify_verdict_heuristic(claim: AtomicClaim, matrix: ClaimEvidenceMatrix)
     return "CONTRADICTED"
 
 
+# Module-level (not function-local) so Phase 8's citation validator can
+# import these exact strings to recognize system-authored process
+# commentary -- which is never a factual assertion about the claim and so
+# is exempt from evidence-grounding checks -- without duplicating them.
+VERDICT_NOTES: dict[InternalVerdict, str] = {
+    "UNVERIFIABLE": "This claim is not independently checkable (opinion or otherwise non-factual).",
+    "INSUFFICIENT_EVIDENCE": "No supporting or contradicting evidence was retrieved.",
+    "OUTDATED": "Only stale coverage was found for a time-sensitive claim; no up-to-date information was retrieved.",
+    "DISPUTED": "Both supporting and contradicting evidence were found; this heuristic cannot adjudicate the conflict.",
+}
+
+
 def _build_rationale_heuristic(verdict: InternalVerdict, matrix: ClaimEvidenceMatrix, rounds: int) -> str:
     """Deterministic explanation tied to what's actually in matrix.unresolved
     -- not just a bare label. Handoff doc section 7, task 11: the system
@@ -103,14 +115,8 @@ def _build_rationale_heuristic(verdict: InternalVerdict, matrix: ClaimEvidenceMa
         f"were found across {rounds} retrieval round(s)."
     ]
 
-    verdict_notes = {
-        "UNVERIFIABLE": "This claim is not independently checkable (opinion or otherwise non-factual).",
-        "INSUFFICIENT_EVIDENCE": "No supporting or contradicting evidence was retrieved.",
-        "OUTDATED": "Only stale coverage was found for a time-sensitive claim; no up-to-date information was retrieved.",
-        "DISPUTED": "Both supporting and contradicting evidence were found; this heuristic cannot adjudicate the conflict.",
-    }
-    if verdict in verdict_notes:
-        parts.append(verdict_notes[verdict])
+    if verdict in VERDICT_NOTES:
+        parts.append(VERDICT_NOTES[verdict])
 
     if matrix.unresolved:
         parts.append("Unresolved: " + "; ".join(matrix.unresolved) + ".")

@@ -3,6 +3,7 @@ import time
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.config import SETTINGS, TruthSettings
+from app.services.truth.citation_validator import validate_rationale
 from app.services.truth.claim_decomposition import ClaimDecomposer
 from app.services.truth.counter_evidence import QueryPlanItem, generate_counter_evidence_queries, generate_followup_queries
 from app.services.truth.domain import AtomicClaim, Evidence
@@ -55,8 +56,10 @@ class VerdictOut(BaseModel):
     """verdict is the simple public vocabulary (handoff doc section 10.5's
     backward-compat mapping); internal_verdict is the richer domain.py
     InternalVerdict this collapsed from, kept for transparency/debugging.
-    No citation validation yet (Phase 8) -- rationale may reference evidence
-    but isn't yet strictly checked against it."""
+    rationale has already passed through Phase 8's citation validator --
+    sentences that don't trace to retrieved evidence, or that cite a URL
+    not actually in the retrieved evidence, are silently stripped before
+    this response is built."""
 
     verdict: PublicVerdict
     internal_verdict: str
@@ -217,10 +220,17 @@ class MultiClaimVerificationService:
         )
 
         verification = generate_verdict(claim, audit.matrix, rounds, self.verifier)
+        # Phase 8: strip any sentence in the rationale that doesn't trace
+        # back to retrieved evidence (or cites a URL that isn't actually
+        # retrieved evidence) before it ever reaches the response -- this
+        # applies uniformly whether the rationale came from a model or the
+        # deterministic heuristic, since either could in principle contain
+        # unsupported content.
+        validated = validate_rationale(verification.rationale, audit.matrix)
         verdict_out = VerdictOut(
             verdict=to_public_verdict(verification.verdict),
             internal_verdict=verification.verdict,
-            rationale=verification.rationale,
+            rationale=validated.rationale,
             confidence_score=verification.confidence_score,
             verifier=str(verification.metadata.get("verifier_used", "heuristic_fallback")),
         )
