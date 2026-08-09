@@ -5,6 +5,7 @@ from urllib.parse import urlsplit
 from app.config import SETTINGS, TruthSettings
 from app.models import ClaimRequest, ClaimResponse, EvidenceItem, ProviderInfo, TruthStatusResponse
 from app.services.truth.cache import ClaimCache
+from app.services.truth.claim_decomposition import ClaimDecomposer
 from app.services.truth.evidence_processing import EvidenceDeduplicator, make_claim_id
 from app.services.truth.evidence_providers import EvidenceProvider, EvidenceSearchContext, create_evidence_provider
 from app.services.truth.extractors import WebExtractor, create_extractor
@@ -34,6 +35,7 @@ class ClaimVerificationService:
         extractor: WebExtractor | None = None,
         verifier: VerificationModel | None = None,
         evidence_provider: EvidenceProvider | None = None,
+        claim_decomposer: ClaimDecomposer | None = None,
         cache: ClaimCache | None = None,
     ):
         self.settings = settings
@@ -41,6 +43,10 @@ class ClaimVerificationService:
         self.extractor = extractor or create_extractor(settings, self.search_provider.name)
         self.verifier = verifier or create_verifier(settings)
         self.evidence_provider = evidence_provider or create_evidence_provider(settings, self.search_provider, self.extractor)
+        # Constructed and available on the service for Phase 4+ wiring; not
+        # yet called from check()/_run_pipeline() -- see Phase 3 report for
+        # why /api/check-claim's single-claim response contract is left as-is.
+        self.claim_decomposer = claim_decomposer or ClaimDecomposer(settings)
         self.deduplicator = EvidenceDeduplicator()
         self.cache = cache or ClaimCache(settings.cache_path)
         self._inflight: dict[str, threading.Event] = {}
