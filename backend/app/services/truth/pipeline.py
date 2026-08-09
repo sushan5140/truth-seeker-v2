@@ -5,11 +5,13 @@ from urllib.parse import urlsplit
 from app.config import SETTINGS, TruthSettings
 from app.models import ClaimRequest, ClaimResponse, EvidenceItem, ProviderInfo, TruthStatusResponse
 from app.services.truth.cache import ClaimCache
-from app.services.truth.extractors import ExtractionError, ExtractedPage, WebExtractor, create_extractor
-from app.services.truth.providers import SearchProvider, SearchProviderError, SearchResult, create_search_provider
+from app.services.truth.evidence_processing import EvidenceDeduplicator, make_claim_id
+from app.services.truth.evidence_providers import EvidenceProvider, EvidenceSearchContext, create_evidence_provider
+from app.services.truth.extractors import WebExtractor, create_extractor
+from app.services.truth.providers import SearchProvider, create_search_provider
 from app.services.truth.ranking import RankedSource, rank_evidence
-from app.services.truth.security import UnsafeUrlError, validate_remote_url
-from app.services.truth.verifier import GeminiEvidenceVerifier, ProcessedClaim, normalize_claim
+from app.services.truth.verification_models import ProcessedClaim, VerificationModel
+from app.services.truth.verifier import GeminiEvidenceVerifier, normalize_claim
 
 
 class ClaimVerificationService:
@@ -19,13 +21,16 @@ class ClaimVerificationService:
         *,
         search_provider: SearchProvider | None = None,
         extractor: WebExtractor | None = None,
-        verifier: GeminiEvidenceVerifier | None = None,
+        verifier: VerificationModel | None = None,
+        evidence_provider: EvidenceProvider | None = None,
         cache: ClaimCache | None = None,
     ):
         self.settings = settings
         self.search_provider = search_provider or create_search_provider(settings)
         self.extractor = extractor or create_extractor(settings, self.search_provider.name)
         self.verifier = verifier or GeminiEvidenceVerifier(settings)
+        self.evidence_provider = evidence_provider or create_evidence_provider(settings, self.search_provider, self.extractor)
+        self.deduplicator = EvidenceDeduplicator()
         self.cache = cache or ClaimCache(settings.cache_path)
         self._inflight: dict[str, threading.Event] = {}
         self._lock = threading.Lock()
@@ -93,14 +98,15 @@ class ClaimVerificationService:
     def _evidence_items(ranked: list[RankedSource], stances: list[str]) -> list[EvidenceItem]:
         items: list[EvidenceItem] = []
         for source, stance in zip(ranked, stances, strict=True):
-            publisher = source.result.publisher or source.page.publisher or urlsplit(source.result.url).hostname or "Unknown publisher"
+            evidence = source.evidence
+            publisher = evidence.publisher or urlsplit(evidence.url).hostname or "Unknown publisher"
             items.append(
                 EvidenceItem(
-                    title=source.page.title or source.result.title,
-                    url=source.result.url,
+                    title=evidence.title or evidence.url,
+                    url=evidence.url,
                     publisher=publisher,
-                    published_at=source.result.published_at or source.page.published_at,
-                    retrieved_at=source.page.retrieved_at,
+                    published_at=evidence.published_at,
+                    retrieved_at=evidence.retrieved_at,
                     stance=stance,
                     excerpt=" … ".join(source.passages),
                     source_category=source.category,
@@ -119,25 +125,21 @@ class ClaimVerificationService:
         if processed.multiple_claims_detected:
             limitations.append("The selection contains multiple claims; only the main claim was checked.")
 
-        try:
-            results = self.search_provider.search(processed.main_claim, request.language, self.settings.max_search_results)[: self.settings.max_search_results]
-        except SearchProviderError:
+        provider_result = self.evidence_provider.search_sync(
+            processed.main_claim,
+            EvidenceSearchContext(
+                claim_id=make_claim_id(processed.main_claim),
+                language=request.language,
+                limit=self.settings.max_search_results,
+            ),
+        )
+        if not provider_result.success:
             result = self._insufficient(processed, limitations + ["The configured search provider was unavailable.", "Absence of evidence does not prove the claim is false."])
             self.cache.set(key, result, self._freshness(processed))
             return result
 
-        extracted: list[tuple[SearchResult, ExtractedPage]] = []
-        resolve_dns = self.search_provider.name != "development_mock"
-        for result in results:
-            try:
-                safe_url = validate_remote_url(result.url, resolve_dns=resolve_dns)
-                safe_result = SearchResult(result.title, safe_url, result.snippet, result.published_at, result.publisher)
-                page = self.extractor.extract(safe_url)
-                extracted.append((safe_result, page))
-            except (UnsafeUrlError, ExtractionError, ValueError):
-                continue
-
-        ranked = rank_evidence(processed.main_claim, extracted, self.settings, time_sensitive=processed.time_sensitive)
+        deduplicated = self.deduplicator.deduplicate(provider_result.evidence)
+        ranked = rank_evidence(processed.main_claim, deduplicated.evidence, self.settings, time_sensitive=processed.time_sensitive)
         if not ranked:
             result = self._insufficient(
                 processed,

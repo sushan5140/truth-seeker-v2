@@ -31,6 +31,10 @@ class TruthSettings:
     duplicate_wait_seconds: float = float(os.getenv("TRUTH_DUPLICATE_WAIT_SECONDS", "15"))
     ordinary_cache_hours: int = _positive_int("TRUTH_ORDINARY_CACHE_HOURS", 72)
     time_sensitive_cache_minutes: int = _positive_int("TRUTH_TIME_SENSITIVE_CACHE_MINUTES", 30)
+    reasoning_model: str | None = os.getenv("TRUTHSEEKER_REASONING_MODEL", "").strip() or None
+    verifier_model: str | None = os.getenv("TRUTHSEEKER_VERIFIER_MODEL", "").strip() or None
+    embedding_model: str | None = os.getenv("TRUTHSEEKER_EMBEDDING_MODEL", "").strip() or None
+    reranker_model: str | None = os.getenv("TRUTHSEEKER_RERANKER_MODEL", "").strip() or None
     user_agent: str = "TruthToneGuardian/2.0 (+local research assistant)"
 
 

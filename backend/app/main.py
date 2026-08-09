@@ -1,4 +1,6 @@
-from fastapi import FastAPI, Request
+from typing import Annotated
+
+from fastapi import Depends, FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -8,17 +10,6 @@ from app.services.tone_checker import check_tone, is_gemini_configured
 from app.services.truth.pipeline import ClaimVerificationService
 
 
-app = FastAPI(title="Truth & Tone Guardian", version="2.0.0")
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=False,
-    allow_methods=["GET", "POST", "DELETE"],
-    allow_headers=["Content-Type"],
-)
-
-
-@app.exception_handler(RequestValidationError)
 async def validation_error_handler(_request: Request, exc: RequestValidationError) -> JSONResponse:
     errors = exc.errors()
     first = errors[0] if errors else {}
@@ -32,34 +23,56 @@ async def validation_error_handler(_request: Request, exc: RequestValidationErro
     return JSONResponse(status_code=422, content={"status": "invalid", "message": message, "errors": errors})
 
 
-@app.get("/health")
-def health() -> dict[str, str | bool]:
-    return {
-        "status": "ok",
-        "service": "truth-tone-guardian",
-        "backend_running": True,
-        "gemini_configured": is_gemini_configured(),
-    }
+def get_truth_service(request: Request) -> ClaimVerificationService:
+    """Resolve the app-scoped service so tests never need the runtime cache."""
+    service = request.app.state.truth_service
+    if service is None:
+        service = ClaimVerificationService()
+        request.app.state.truth_service = service
+    return service
 
 
-truth_service = ClaimVerificationService()
+TruthServiceDependency = Annotated[ClaimVerificationService, Depends(get_truth_service)]
 
 
-@app.get("/api/truth/status", response_model=TruthStatusResponse)
-def truth_status() -> TruthStatusResponse:
-    return truth_service.status()
+def create_app(service: ClaimVerificationService | None = None) -> FastAPI:
+    application = FastAPI(title="Truth & Tone Guardian", version="2.0.0")
+    application.state.truth_service = service
+    application.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_credentials=False,
+        allow_methods=["GET", "POST", "DELETE"],
+        allow_headers=["Content-Type"],
+    )
+    application.add_exception_handler(RequestValidationError, validation_error_handler)
+
+    @application.get("/health")
+    def health() -> dict[str, str | bool]:
+        return {
+            "status": "ok",
+            "service": "truth-tone-guardian",
+            "backend_running": True,
+            "gemini_configured": is_gemini_configured(),
+        }
+
+    @application.get("/api/truth/status", response_model=TruthStatusResponse)
+    def truth_status(active_service: TruthServiceDependency) -> TruthStatusResponse:
+        return active_service.status()
+
+    @application.post("/api/check-claim", response_model=ClaimResponse)
+    def claim_endpoint(request: ClaimRequest, active_service: TruthServiceDependency) -> ClaimResponse:
+        return active_service.check(request)
+
+    @application.delete("/api/truth/cache")
+    def clear_truth_cache(active_service: TruthServiceDependency) -> dict[str, int | str]:
+        return {"status": "cleared", "entries_removed": active_service.cache.clear()}
+
+    @application.post("/api/check-tone", response_model=ToneResponse)
+    def tone_endpoint(request: ToneRequest) -> ToneResponse:
+        return check_tone(request.text, request.sensitivity)
+
+    return application
 
 
-@app.post("/api/check-claim", response_model=ClaimResponse)
-def claim_endpoint(request: ClaimRequest) -> ClaimResponse:
-    return truth_service.check(request)
-
-
-@app.delete("/api/truth/cache")
-def clear_truth_cache() -> dict[str, int | str]:
-    return {"status": "cleared", "entries_removed": truth_service.cache.clear()}
-
-
-@app.post("/api/check-tone", response_model=ToneResponse)
-def tone_endpoint(request: ToneRequest) -> ToneResponse:
-    return check_tone(request.text, request.sensitivity)
+app = create_app()

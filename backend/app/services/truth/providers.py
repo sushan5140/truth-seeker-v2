@@ -13,6 +13,10 @@ class SearchProviderError(RuntimeError):
     pass
 
 
+class SearchProviderTimeout(SearchProviderError):
+    pass
+
+
 @dataclass(frozen=True)
 class SearchResult:
     title: str
@@ -48,6 +52,8 @@ class SearXNGSearchProvider(SearchProvider):
             )
             response.raise_for_status()
             payload: dict[str, Any] = response.json()
+        except httpx.TimeoutException as exc:
+            raise SearchProviderTimeout("SearXNG search timed out") from exc
         except (httpx.HTTPError, ValueError) as exc:
             raise SearchProviderError("SearXNG search failed") from exc
 

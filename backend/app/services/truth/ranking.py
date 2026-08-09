@@ -1,4 +1,3 @@
-import hashlib
 import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -6,8 +5,7 @@ from urllib.parse import urlsplit
 
 from app.config import TruthSettings
 from app.models import SourceCategory
-from app.services.truth.extractors import ExtractedPage
-from app.services.truth.providers import SearchResult
+from app.services.truth.domain import Evidence
 
 
 CATEGORY_SCORE: dict[SourceCategory, float] = {
@@ -29,8 +27,7 @@ WORD_PATTERN = re.compile(r"[a-z0-9']+", re.IGNORECASE)
 
 @dataclass(frozen=True)
 class RankedSource:
-    result: SearchResult
-    page: ExtractedPage
+    evidence: Evidence
     category: SourceCategory
     passages: list[str]
     score: float
@@ -80,36 +77,33 @@ def _recency_score(published_at: str | None, time_sensitive: bool) -> float:
 
 def rank_evidence(
     claim: str,
-    sources: list[tuple[SearchResult, ExtractedPage]],
+    sources: list[Evidence],
     settings: TruthSettings,
     *,
     time_sensitive: bool,
 ) -> list[RankedSource]:
     claim_tokens = _tokens(claim)
     ranked: list[RankedSource] = []
-    fingerprints: set[str] = set()
     domains: set[str] = set()
 
-    for result, page in sources:
+    for evidence in sources:
+        raw_passages = evidence.metadata.get("passages")
+        passages = raw_passages if isinstance(raw_passages, list) else [evidence.text]
         scored_passages = sorted(
-            ((_passage_score(claim_tokens, passage), passage) for passage in page.passages),
+            ((_passage_score(claim_tokens, str(passage)), str(passage)) for passage in passages),
             key=lambda item: item[0],
             reverse=True,
         )
         selected = [passage[: settings.max_passage_length] for score, passage in scored_passages if score > 0][: settings.max_passages_per_source]
         if not selected:
             continue
-        fingerprint = hashlib.sha256(" ".join(selected).lower().encode("utf-8")).hexdigest()[:20]
-        if fingerprint in fingerprints:
-            continue
-        fingerprints.add(fingerprint)
 
-        category = source_category(result.url)
-        domain = urlsplit(result.url).hostname or ""
+        category = source_category(evidence.canonical_url)
+        domain = str(evidence.metadata.get("domain_group") or urlsplit(evidence.canonical_url).hostname or "")
         independence = 0 if domain in domains else 8
         domains.add(domain)
         relevance = min(45, max(score for score, _ in scored_passages) * 45)
-        score = min(100, relevance + CATEGORY_SCORE[category] + _recency_score(result.published_at or page.published_at, time_sensitive) + independence)
-        ranked.append(RankedSource(result, page, category, selected, round(score, 1)))
+        score = min(100, relevance + CATEGORY_SCORE[category] + _recency_score(evidence.published_at, time_sensitive) + independence)
+        ranked.append(RankedSource(evidence, category, selected, round(score, 1)))
 
     return sorted(ranked, key=lambda item: item.score, reverse=True)[: settings.max_evidence_sources]

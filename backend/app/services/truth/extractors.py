@@ -16,6 +16,10 @@ class ExtractionError(RuntimeError):
     pass
 
 
+class ExtractionTimeoutError(ExtractionError):
+    pass
+
+
 @dataclass(frozen=True)
 class ExtractedPage:
     title: str
@@ -101,6 +105,8 @@ class LightweightHttpExtractor(WebExtractor):
                             chunks.append(chunk)
                         html = b"".join(chunks).decode(response.encoding or "utf-8", errors="replace")
                         return _clean_html(html, current)
+                except httpx.TimeoutException as exc:
+                    raise ExtractionTimeoutError("Source download timed out") from exc
                 except httpx.HTTPError as exc:
                     raise ExtractionError("Source download failed") from exc
         raise ExtractionError("Source extraction failed")

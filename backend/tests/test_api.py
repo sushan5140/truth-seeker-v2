@@ -1,30 +1,37 @@
 import pytest
 import time
+from dataclasses import replace
 from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-from app.main import app
-from app import main as main_module
+from app.config import SETTINGS
+from app.main import create_app
 from app.models import GeminiToneResult
 from app.services import tone_checker
+from app.services.truth.pipeline import ClaimVerificationService
 
 
-client = TestClient(app)
+@pytest.fixture
+def api_truth_service(tmp_path, monkeypatch):
+    settings = replace(SETTINGS, cache_path=tmp_path / "api-claim-cache.sqlite3")
+    service = ClaimVerificationService(settings)
+    monkeypatch.setattr(service.verifier, "api_key", "")
+    return service
 
 
-@pytest.fixture(autouse=True)
-def mock_gemini_by_default(monkeypatch):
+@pytest.fixture
+def client(api_truth_service, monkeypatch):
     """Keep every ordinary test local and quota-free."""
     def unavailable(_text, _api_key, _sensitivity):
         raise RuntimeError("mock Gemini unavailable")
 
     monkeypatch.setattr(tone_checker, "_generate_with_gemini", unavailable)
-    monkeypatch.setattr(main_module.truth_service.verifier, "api_key", "")
-    main_module.truth_service.cache.clear()
+    with TestClient(create_app(api_truth_service)) as test_client:
+        yield test_client
 
 
-def test_health_endpoint():
+def test_health_endpoint(client):
     response = client.get("/health")
     assert response.status_code == 200
     assert response.json()["status"] == "ok"
@@ -32,26 +39,26 @@ def test_health_endpoint():
     assert isinstance(response.json()["gemini_configured"], bool)
 
 
-def test_empty_claim_input():
+def test_empty_claim_input(client):
     response = client.post("/api/check-claim", json={"text": ""})
     assert response.status_code == 422
     assert response.json()["status"] == "invalid"
 
 
-def test_claim_longer_than_5000_characters():
+def test_claim_longer_than_5000_characters(client):
     response = client.post("/api/check-claim", json={"text": "a" * 5001})
     assert response.status_code == 422
     assert "5,000" in response.json()["message"]
 
 
-def test_opinion_detection():
+def test_opinion_detection(client):
     response = client.post("/api/check-claim", json={"text": "I think summer is the best season."})
     assert response.status_code == 200
     assert response.json()["verdict"] == "opinion"
     assert response.json()["evidence"] == []
 
 
-def test_default_insufficient_evidence_result_without_gemini():
+def test_default_insufficient_evidence_result_without_gemini(client):
     response = client.post("/api/check-claim", json={"text": "The city has twelve public parks."})
     data = response.json()
     assert response.status_code == 200
@@ -60,7 +67,23 @@ def test_default_insufficient_evidence_result_without_gemini():
     assert any("not prove" in limitation.lower() or "not inferred" in limitation.lower() for limitation in data["limitations"])
 
 
-def test_hostile_phrase_detection():
+def test_api_tests_use_temporary_cache_without_touching_configured_cache(client, api_truth_service):
+    configured_path = SETTINGS.cache_path
+    existed_before = configured_path.exists()
+    contents_before = configured_path.read_bytes() if existed_before else None
+
+    assert api_truth_service.cache.path != configured_path
+    assert api_truth_service.cache.path.parent != configured_path.parent
+    response = client.post("/api/check-claim", json={"text": "The city has twelve public parks."})
+
+    assert response.status_code == 200
+    assert api_truth_service.cache.path.exists()
+    assert configured_path.exists() is existed_before
+    if existed_before:
+        assert configured_path.read_bytes() == contents_before
+
+
+def test_hostile_phrase_detection(client):
     response = client.post("/api/check-tone", json={"text": "That is a stupid idea."})
     assert response.status_code == 200
     assert response.json()["intervention_needed"] is True
@@ -68,7 +91,7 @@ def test_hostile_phrase_detection():
     assert response.json()["problematic_phrase"] == "stupid"
 
 
-def test_neutral_tone():
+def test_neutral_tone(client):
     message = "I disagree because the evidence is incomplete."
     response = client.post("/api/check-tone", json={"text": message})
     assert response.status_code == 200
@@ -77,7 +100,7 @@ def test_neutral_tone():
     assert response.json()["suggested_rewrite"] == message
 
 
-def test_rewrite_preserves_disagreement():
+def test_rewrite_preserves_disagreement(client):
     response = client.post("/api/check-tone", json={"text": "This idea is nuts and will never work."})
     suggestion = response.json()["suggested_rewrite"].lower()
     assert response.status_code == 200
@@ -96,7 +119,7 @@ def test_rewrite_preserves_disagreement():
         ("This idea is nuts and will never work.", "nuts"),
     ],
 )
-def test_high_confidence_hostile_examples(message, phrase):
+def test_high_confidence_hostile_examples(client, message, phrase):
     response = client.post("/api/check-tone", json={"text": message})
     data = response.json()
     assert response.status_code == 200
@@ -119,7 +142,7 @@ def test_high_confidence_hostile_examples(message, phrase):
         "He said, ‘this idea is ridiculous.’",
     ],
 )
-def test_harmless_examples_remain_silent(message):
+def test_harmless_examples_remain_silent(client, message):
     response = client.post("/api/check-tone", json={"text": message})
     data = response.json()
     assert response.status_code == 200
@@ -129,13 +152,13 @@ def test_harmless_examples_remain_silent(message):
 
 
 @pytest.mark.parametrize("message", ["stupid", "This idea is stupid", "You are an idiot"])
-def test_keyword_only_or_incomplete_text_remains_silent(message):
+def test_keyword_only_or_incomplete_text_remains_silent(client, message):
     response = client.post("/api/check-tone", json={"text": message})
     assert response.status_code == 200
     assert response.json()["intervention_needed"] is False
 
 
-def test_valid_gemini_structured_response(monkeypatch):
+def test_valid_gemini_structured_response(client, monkeypatch):
     result = GeminiToneResult(
         intervention_needed=True,
         category="dismissive_language",
@@ -153,7 +176,7 @@ def test_valid_gemini_structured_response(monkeypatch):
     assert data["confidence"] == "high"
 
 
-def test_gemini_normal_disagreement_stays_silent(monkeypatch):
+def test_gemini_normal_disagreement_stays_silent(client, monkeypatch):
     message = "I don’t think this approach will work because it is too expensive."
     result = GeminiToneResult(
         intervention_needed=False,
@@ -170,20 +193,20 @@ def test_gemini_normal_disagreement_stays_silent(monkeypatch):
     assert data["suggested_rewrite"] == message
 
 
-def test_malformed_gemini_response_uses_fallback(monkeypatch):
+def test_malformed_gemini_response_uses_fallback(client, monkeypatch):
     monkeypatch.setattr(tone_checker, "_generate_with_gemini", lambda _text, _key, _sensitivity: (_ for _ in ()).throw(ValueError("invalid JSON")))
     data = client.post("/api/check-tone", json={"text": "You are an idiot."}).json()
     assert data["provider"] == "local_fallback"
     assert data["intervention_needed"] is True
 
 
-def test_missing_key_uses_fallback(monkeypatch):
+def test_missing_key_uses_fallback(client, monkeypatch):
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     data = client.post("/api/check-tone", json={"text": "You are an idiot."}).json()
     assert data["provider"] == "local_fallback"
 
 
-def test_timeout_uses_fallback_quickly(monkeypatch):
+def test_timeout_uses_fallback_quickly(client, monkeypatch):
     def timeout(_text, _api_key, _sensitivity):
         raise TimeoutError("mock timeout")
 
@@ -195,7 +218,7 @@ def test_timeout_uses_fallback_quickly(monkeypatch):
     assert elapsed < 0.5
 
 
-def test_rewrite_preserves_the_disagreement_with_gemini(monkeypatch):
+def test_rewrite_preserves_the_disagreement_with_gemini(client, monkeypatch):
     result = GeminiToneResult(
         intervention_needed=True,
         category="dismissive_language",
@@ -222,7 +245,7 @@ def test_stale_and_duplicate_request_guards_exist_without_worker_cancellation():
     assert "return { ok: true, data };" in background
 
 
-def test_sensitivity_levels_have_distinct_fallback_behavior(monkeypatch):
+def test_sensitivity_levels_have_distinct_fallback_behavior(client, monkeypatch):
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     clear_insult = "You are an idiot."
     strong_dismissal = "This idea is stupid."
@@ -241,12 +264,12 @@ def test_sensitivity_levels_have_distinct_fallback_behavior(monkeypatch):
     assert client.post("/api/check-tone", json={"text": mild_dismissal, "sensitivity": "high"}).json()["intervention_needed"] is True
 
 
-def test_invalid_sensitivity_is_rejected():
+def test_invalid_sensitivity_is_rejected(client):
     response = client.post("/api/check-tone", json={"text": "You are an idiot.", "sensitivity": "maximum"})
     assert response.status_code == 422
 
 
-def test_selected_sensitivity_is_sent_to_gemini(monkeypatch):
+def test_selected_sensitivity_is_sent_to_gemini(client, monkeypatch):
     observed = {}
     result = GeminiToneResult(
         intervention_needed=False,

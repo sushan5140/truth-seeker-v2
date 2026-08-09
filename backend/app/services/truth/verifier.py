@@ -1,7 +1,6 @@
 import json
 import os
 import re
-from dataclasses import dataclass
 
 from google import genai
 from google.genai import types
@@ -9,17 +8,10 @@ from google.genai import types
 from app.config import TruthSettings
 from app.models import GeminiClaimExtraction, GeminiEvidenceAssessment
 from app.services.truth.ranking import RankedSource
+from app.services.truth.verification_models import ProcessedClaim, VerificationModel
 
 
 GEMINI_MODEL = "gemini-flash-lite-latest"
-
-
-@dataclass(frozen=True)
-class ProcessedClaim:
-    kind: str
-    main_claim: str
-    multiple_claims_detected: bool
-    time_sensitive: bool
 
 
 def normalize_claim(text: str) -> str:
@@ -46,7 +38,7 @@ def local_claim_processing(text: str) -> ProcessedClaim:
     return ProcessedClaim(kind, main[:5000], multiple, time_sensitive)
 
 
-class GeminiEvidenceVerifier:
+class GeminiEvidenceVerifier(VerificationModel):
     def __init__(self, settings: TruthSettings):
         self.settings = settings
         self.api_key = os.getenv("GEMINI_API_KEY", "").strip()
@@ -96,9 +88,9 @@ class GeminiEvidenceVerifier:
             sources.append(
                 {
                     "source_index": index,
-                    "title": item.page.title or item.result.title,
-                    "url": item.result.url,
-                    "published_at": item.result.published_at or item.page.published_at,
+                    "title": item.evidence.title,
+                    "url": item.evidence.url,
+                    "published_at": item.evidence.published_at,
                     "passages": item.passages,
                 }
             )
