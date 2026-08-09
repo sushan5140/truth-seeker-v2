@@ -4,6 +4,8 @@ from app.config import SETTINGS, TruthSettings
 from app.services.truth.claim_decomposition import ClaimDecomposer
 from app.services.truth.counter_evidence import QueryPlanItem, generate_counter_evidence_queries
 from app.services.truth.domain import AtomicClaim, Evidence
+from app.services.truth.evidence_classification import EvidenceClassifier, score_relevance
+from app.services.truth.evidence_matrix import build_claim_audit
 from app.services.truth.evidence_processing import EvidenceDeduplicator
 from app.services.truth.evidence_providers import EvidenceProvider, EvidenceSearchContext, create_evidence_provider
 from app.services.truth.extractors import WebExtractor, create_extractor
@@ -25,14 +27,30 @@ class EvidenceWithProvenance(BaseModel):
     query: str
     query_category: str
     excerpt: str
+    relevance_score: float
+
+
+class SourceQualitySignals(BaseModel):
+    total_evidence: int
+    independent_domain_count: int
+    independent_publisher_count: int
+    evidence_with_published_date_count: int
+    duplicate_evidence_removed_count: int
+
+
+class ClaimEvidenceMatrixOut(BaseModel):
+    supporting: list[EvidenceWithProvenance]
+    contradicting: list[EvidenceWithProvenance]
+    context: list[EvidenceWithProvenance]
+    unresolved: list[str]
 
 
 class ClaimVerificationPlan(BaseModel):
-    """Evidence-gathering result for one atomic claim.
+    """Evidence-gathering and evidence-auditing result for one atomic claim.
 
-    Deliberately has no verdict field -- Phase 4 is counter-evidence
-    retrieval only. Reasoning over this evidence into a verdict is
-    Phase 5+ scope (claim-evidence matrix / verification engine).
+    Deliberately has no verdict field -- Phase 5 groups and scores evidence
+    (claim-evidence matrix, gap analysis, source-quality signals); reasoning
+    that evidence into a verdict is later phase scope (verification engine).
     """
 
     claim_id: str
@@ -44,7 +62,9 @@ class ClaimVerificationPlan(BaseModel):
     location: str | None
     time_reference: str | None
     queries: list[QueryPlanItem]
-    evidence: list[EvidenceWithProvenance]
+    matrix: ClaimEvidenceMatrixOut
+    source_quality: SourceQualitySignals
+    classifier: str
     provider: str
     provider_errors: list[str]
 
@@ -54,7 +74,7 @@ class VerifyResponse(BaseModel):
     multiple_claims_detected: bool
 
 
-def _to_evidence_out(evidence: Evidence) -> EvidenceWithProvenance:
+def _to_evidence_out(claim: AtomicClaim, evidence: Evidence) -> EvidenceWithProvenance:
     return EvidenceWithProvenance(
         title=evidence.title,
         url=evidence.url,
@@ -63,15 +83,17 @@ def _to_evidence_out(evidence: Evidence) -> EvidenceWithProvenance:
         query=str(evidence.metadata.get("query", "")),
         query_category=str(evidence.metadata.get("query_category", "")),
         excerpt=evidence.evidence_chunk,
+        relevance_score=score_relevance(claim, evidence),
     )
 
 
 class MultiClaimVerificationService:
-    """Orchestrates Phase 3 decomposition + Phase 4 counter-evidence
-    retrieval for /api/v2/verify. Reuses the existing Phase 1 provider
-    stack (SearchProvider/WebExtractor/EvidenceProvider/EvidenceDeduplicator)
-    unchanged -- SSRF protection, timeouts, and dedup all apply exactly as
-    they do for /api/check-claim, since it's the same underlying code."""
+    """Orchestrates Phase 3 decomposition, Phase 4 counter-evidence
+    retrieval, and Phase 5 evidence auditing for /api/v2/verify. Reuses the
+    existing Phase 1 provider stack (SearchProvider/WebExtractor/
+    EvidenceProvider/EvidenceDeduplicator) unchanged -- SSRF protection,
+    timeouts, and dedup all apply exactly as they do for /api/check-claim,
+    since it's the same underlying code."""
 
     def __init__(
         self,
@@ -81,6 +103,7 @@ class MultiClaimVerificationService:
         search_provider: SearchProvider | None = None,
         extractor: WebExtractor | None = None,
         evidence_provider: EvidenceProvider | None = None,
+        classifier: EvidenceClassifier | None = None,
     ):
         self.settings = settings
         self.claim_decomposer = claim_decomposer or ClaimDecomposer(settings)
@@ -88,15 +111,14 @@ class MultiClaimVerificationService:
         resolved_extractor = extractor or create_extractor(settings, resolved_search_provider.name)
         self.evidence_provider = evidence_provider or create_evidence_provider(settings, resolved_search_provider, resolved_extractor)
         self.deduplicator = EvidenceDeduplicator()
+        self.classifier = classifier or EvidenceClassifier(settings)
 
     def verify(self, text: str, language: str = "en") -> VerifyResponse:
         claims = self.claim_decomposer.decompose(text)
         plans = [self._plan_for_claim(claim, language) for claim in claims]
         return VerifyResponse(claims=plans, multiple_claims_detected=len(claims) > 1)
 
-    def _plan_for_claim(self, claim: AtomicClaim, language: str) -> ClaimVerificationPlan:
-        queries = generate_counter_evidence_queries(claim, self.settings)
-
+    def _gather_evidence(self, claim: AtomicClaim, queries: list[QueryPlanItem], language: str) -> tuple[list[Evidence], list[str]]:
         gathered: list[Evidence] = []
         errors: list[str] = []
         for item in queries:
@@ -115,8 +137,21 @@ class MultiClaimVerificationService:
                 )
                 for evidence in result.evidence
             )
+        return gathered, errors
 
+    def _plan_for_claim(self, claim: AtomicClaim, language: str) -> ClaimVerificationPlan:
+        queries = generate_counter_evidence_queries(claim, self.settings)
+        gathered, errors = self._gather_evidence(claim, queries, language)
         deduplicated = self.deduplicator.deduplicate(gathered)
+
+        audit = build_claim_audit(claim, deduplicated.evidence, self.classifier)
+
+        matrix_out = ClaimEvidenceMatrixOut(
+            supporting=[_to_evidence_out(claim, item) for item in audit.matrix.supporting],
+            contradicting=[_to_evidence_out(claim, item) for item in audit.matrix.contradicting],
+            context=[_to_evidence_out(claim, item) for item in audit.matrix.context],
+            unresolved=audit.matrix.unresolved,
+        )
 
         return ClaimVerificationPlan(
             claim_id=claim.claim_id,
@@ -128,7 +163,15 @@ class MultiClaimVerificationService:
             location=claim.location,
             time_reference=claim.time_reference,
             queries=queries,
-            evidence=[_to_evidence_out(evidence) for evidence in deduplicated.evidence],
+            matrix=matrix_out,
+            source_quality=SourceQualitySignals(
+                total_evidence=audit.source_quality.total_evidence,
+                independent_domain_count=audit.source_quality.independent_domain_count,
+                independent_publisher_count=audit.source_quality.independent_publisher_count,
+                evidence_with_published_date_count=audit.source_quality.evidence_with_published_date_count,
+                duplicate_evidence_removed_count=audit.source_quality.duplicate_evidence_removed_count,
+            ),
+            classifier=audit.classifier_name,
             provider=self.evidence_provider.name,
             provider_errors=errors,
         )

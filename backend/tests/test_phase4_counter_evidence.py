@@ -68,6 +68,13 @@ class StubClaimDecomposer:
         return self.claims
 
 
+def _all_matrix_evidence(plan):
+    """Phase 5 replaced the flat plan.evidence list with a claim-evidence
+    matrix (supporting/contradicting/context); tests that only care about
+    total retrieved+deduplicated evidence, not stance, use this."""
+    return plan.matrix.supporting + plan.matrix.contradicting + plan.matrix.context
+
+
 # --- generate_counter_evidence_queries -----------------------------------
 
 
@@ -140,9 +147,11 @@ def test_verify_single_factual_claim_gathers_evidence_with_provenance():
     assert response.multiple_claims_detected is False
     assert len(response.claims) == 1
     plan = response.claims[0]
-    assert len(plan.evidence) == 1
-    assert plan.evidence[0].query == claim.normalized_claim
-    assert plan.evidence[0].query_category == "supporting"
+    # evidence text == claim text, so the heuristic classifier scores it as
+    # a clear lexical match with no negation cues -> supporting.
+    assert len(plan.matrix.supporting) == 1
+    assert plan.matrix.supporting[0].query == claim.normalized_claim
+    assert plan.matrix.supporting[0].query_category == "supporting"
     assert plan.provider == "stub_evidence"
 
 
@@ -165,8 +174,10 @@ def test_opinion_claim_never_triggers_a_search():
 
     response = service.verify("I think summer is the best season.")
 
-    assert response.claims[0].queries == []
-    assert response.claims[0].evidence == []
+    plan = response.claims[0]
+    assert plan.queries == []
+    assert _all_matrix_evidence(plan) == []
+    assert plan.matrix.unresolved == ["no evidence retrieved for this claim"]
     assert provider.calls == []
 
 
@@ -188,7 +199,7 @@ def test_provider_failure_is_recorded_and_not_fatal():
             working_query: ProviderResult(
                 success=True,
                 provider="stub_evidence",
-                evidence=[_evidence(claim.claim_id, "https://example.org/parks", "Some corroborating text.")],
+                evidence=[_evidence(claim.claim_id, "https://example.org/parks", "The city has twelve public parks, officials confirmed.")],
                 latency_ms=0,
             ),
         }
@@ -198,7 +209,7 @@ def test_provider_failure_is_recorded_and_not_fatal():
     plan = service.verify(claim.original_text).claims[0]
 
     assert plan.provider_errors == ["supporting: offline"]
-    assert len(plan.evidence) == 1
+    assert len(_all_matrix_evidence(plan)) == 1
 
 
 def test_duplicate_evidence_across_categories_is_collapsed_but_distinct_evidence_survives():
@@ -222,11 +233,12 @@ def test_duplicate_evidence_across_categories_is_collapsed_but_distinct_evidence
     service = MultiClaimVerificationService(settings, claim_decomposer=StubClaimDecomposer([claim]), evidence_provider=provider)
 
     plan = service.verify(claim.original_text).claims[0]
+    all_evidence = _all_matrix_evidence(plan)
 
-    urls = sorted(item.url for item in plan.evidence)
+    urls = sorted(item.url for item in all_evidence)
     assert urls == ["https://independent.example/story", "https://syndicate.example/story"]
     # first occurrence wins provenance, per EvidenceDeduplicator's existing behavior
-    duplicate_out = next(item for item in plan.evidence if item.url == "https://syndicate.example/story")
+    duplicate_out = next(item for item in all_evidence if item.url == "https://syndicate.example/story")
     assert duplicate_out.query_category == "supporting"
 
 
