@@ -12,6 +12,7 @@ from app.services.truth.citation_validator import (
 from app.services.truth.claim_decomposition import local_decompose_claims
 from app.services.truth.domain import ClaimEvidenceMatrix, Evidence, ProviderResult, VerificationResult
 from app.services.truth.evidence_processing import hash_evidence_content
+from app.services.truth.evidence_providers import EvidenceProvider
 from app.services.truth.verdict_generation import MATRIX_SYSTEM_INSTRUCTION, heuristic_verdict
 from app.services.truth.verify_v2 import MultiClaimVerificationService
 
@@ -54,7 +55,7 @@ def _matrix(claim, *, supporting=None, contradicting=None, context=None, unresol
     )
 
 
-class StubEvidenceProvider:
+class StubEvidenceProvider(EvidenceProvider):
     name = "stub_evidence"
 
     def __init__(self, responses=None):

@@ -1,3 +1,4 @@
+import asyncio
 import time
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -6,7 +7,7 @@ from app.config import SETTINGS, TruthSettings
 from app.services.truth.citation_validator import validate_rationale
 from app.services.truth.claim_decomposition import ClaimDecomposer
 from app.services.truth.counter_evidence import QueryPlanItem, generate_counter_evidence_queries, generate_followup_queries
-from app.services.truth.domain import AtomicClaim, Evidence
+from app.services.truth.domain import AtomicClaim, Evidence, ProviderError, ProviderResult
 from app.services.truth.evidence_classification import EvidenceClassifier, score_relevance
 from app.services.truth.evidence_matrix import build_claim_audit
 from app.services.truth.evidence_processing import EvidenceDeduplicator
@@ -149,24 +150,74 @@ class MultiClaimVerificationService:
     def _gather_evidence(
         self, claim: AtomicClaim, queries: list[QueryPlanItem], language: str, *, round_number: int, deadline: float | None = None
     ) -> tuple[list[Evidence], list[str], bool]:
-        """Runs queries in order, tagging each result with its query/category/
-        round for provenance. If deadline (time.monotonic() cutoff) is given
-        and is reached before a query starts, remaining queries in this call
-        are skipped and timed_out=True is returned -- used for Phase 6's
-        second-round time budget; round 1 never passes a deadline."""
+        """Sync-facing entry point -- runs the concurrent gather below via
+        asyncio.run(). Safe to call from here: FastAPI dispatches this
+        service's sync callers to a worker thread with no event loop of its
+        own, and direct unit-test calls have no event loop running either,
+        so this never collides with an already-running loop. Kept sync
+        (rather than making verify()/_plan_for_claim() async, which would
+        force every existing caller and test to change) so this is a
+        narrowly-scoped concurrency fix, not a wider API change."""
+        return asyncio.run(
+            self._gather_evidence_concurrent(claim, queries, language, round_number=round_number, deadline=deadline)
+        )
+
+    async def _gather_evidence_concurrent(
+        self, claim: AtomicClaim, queries: list[QueryPlanItem], language: str, *, round_number: int, deadline: float | None = None
+    ) -> tuple[list[Evidence], list[str], bool]:
+        """Runs all queries concurrently, bounded by
+        settings.max_concurrent_retrievals, tagging each result with its
+        query/category/round for provenance. Applies identically to round 1
+        and Phase 6's round 2 -- same method either way, no sequential path
+        left anywhere. A single query's failure (including an unexpected
+        exception, not just a reported ProviderResult failure) never aborts
+        the others -- same 'never raises, always returns what was found'
+        discipline as Phase 4/6. Per-source (per-URL) timeout is unchanged,
+        existing Phase 1 behavior (ExtractionTimeoutError / extraction_timeout_seconds
+        inside WebExtractionProvider.extract()); this only adds a round-level
+        deadline for Phase 6's second round, now enforced via asyncio.wait
+        instead of a sequential before-each-query check, so queries already
+        in flight when the deadline hits are cancelled rather than never
+        started -- still 'whatever completed is kept', just cooperative
+        cancellation instead of a skip-before-start."""
+        semaphore = asyncio.Semaphore(self.settings.max_concurrent_retrievals)
+
+        async def _run_one(item: QueryPlanItem) -> tuple[QueryPlanItem, ProviderResult]:
+            async with semaphore:
+                try:
+                    context = EvidenceSearchContext(
+                        claim_id=claim.claim_id,
+                        language=language,
+                        limit=self.settings.max_search_results,
+                    )
+                    result = await self.evidence_provider.search(item.query, context)
+                except Exception as exc:
+                    result = ProviderResult(
+                        success=False,
+                        provider=self.evidence_provider.name,
+                        errors=[ProviderError(code="PROVIDER_FAILURE", message=str(exc))],
+                        latency_ms=0.0,
+                    )
+                return item, result
+
+        tasks = [asyncio.ensure_future(_run_one(item)) for item in queries]
+
+        timed_out = False
+        if deadline is None:
+            pairs = await asyncio.gather(*tasks)
+        else:
+            remaining = max(0.0, deadline - time.monotonic())
+            done, pending = await asyncio.wait(tasks, timeout=remaining)
+            if pending:
+                timed_out = True
+                for task in pending:
+                    task.cancel()
+                await asyncio.gather(*pending, return_exceptions=True)
+            pairs = [task.result() for task in tasks if task in done]
+
         gathered: list[Evidence] = []
         errors: list[str] = []
-        timed_out = False
-        for item in queries:
-            if deadline is not None and time.monotonic() >= deadline:
-                timed_out = True
-                break
-            context = EvidenceSearchContext(
-                claim_id=claim.claim_id,
-                language=language,
-                limit=self.settings.max_search_results,
-            )
-            result = self.evidence_provider.search_sync(item.query, context)
+        for item, result in pairs:
             if not result.success:
                 errors.extend(f"{item.category} (round {round_number}): {error.message}" for error in result.errors)
                 continue

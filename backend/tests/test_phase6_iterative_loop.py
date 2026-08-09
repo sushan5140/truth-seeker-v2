@@ -1,4 +1,5 @@
 import time
+from dataclasses import replace
 from datetime import datetime, timezone
 
 from fastapi.testclient import TestClient
@@ -59,12 +60,16 @@ def _evidence(claim_id, url, text, *, domain_group=None, published_at=None):
 class StubEvidenceProvider(EvidenceProvider):
     name = "stub_evidence"
 
-    def __init__(self, responses: dict[str, ProviderResult] | None = None):
+    def __init__(self, responses: dict[str, ProviderResult] | None = None, delays: dict[str, float] | None = None):
         self.responses = responses or {}
+        self.delays = delays or {}
         self.calls: list[str] = []
 
     def search_sync(self, query, context):
         self.calls.append(query)
+        delay = self.delays.get(query)
+        if delay:
+            time.sleep(delay)
         return self.responses.get(query, ProviderResult(success=True, provider=self.name, evidence=[], latency_ms=0))
 
 
@@ -217,9 +222,15 @@ def test_second_round_graceful_fallback_when_gap_remains_unresolved():
     assert plan.matrix.contradicting == []
 
 
-def test_second_round_timeout_skips_remaining_followups(monkeypatch):
+def test_second_round_timeout_excludes_the_slow_query_but_keeps_the_fast_one():
+    """Round 2's queries now run concurrently (Phase 9), so 'timeout' no
+    longer means 'never started' -- it means 'still in flight when the
+    deadline hit, and got cancelled'. Uses real short sleeps rather than a
+    mocked clock, since the deadline is now enforced via asyncio.wait(),
+    not a sequential before-each-query check."""
     claim = _claim()
-    queries = generate_counter_evidence_queries(claim, SETTINGS)
+    settings = replace(SETTINGS, second_round_timeout_seconds=0.15)
+    queries = generate_counter_evidence_queries(claim, settings)
     by_category = {item.category: item.query for item in queries}
 
     # Leave both "contradicting" and "official_source" unanswered in round 1
@@ -228,30 +239,31 @@ def test_second_round_timeout_skips_remaining_followups(monkeypatch):
 
     followups = generate_followup_queries(claim, [GAP_NO_CONTRADICTING, GAP_NO_OFFICIAL_SOURCE])
     assert [item.category for item in followups] == ["contradicting", "official_source"]
-    first_followup_query, second_followup_query = (item.query for item in followups)
-    round2_ev = _evidence(claim.claim_id, "https://c.example/1", "Officials debunked the claim the city has twelve public parks.", domain_group="c.example")
+    fast_query, slow_query = (item.query for item in followups)
+    # No negation markers in fast_ev's text -- it must land in the
+    # "supporting" bucket for this test's assertions to check the right thing.
+    fast_ev = _evidence(claim.claim_id, "https://c.example/1", "Officials confirmed the city has twelve public parks.", domain_group="c.example")
+    slow_ev = _evidence(claim.claim_id, "https://d.example/1", "The city has twelve public parks per official records.", domain_group="d.example")
 
     provider = StubEvidenceProvider(
         responses={
             by_category["supporting"]: ProviderResult(success=True, provider="stub", evidence=[supporting_ev], latency_ms=0),
-            first_followup_query: ProviderResult(success=True, provider="stub", evidence=[round2_ev], latency_ms=0),
-            second_followup_query: ProviderResult(success=True, provider="stub", evidence=[round2_ev], latency_ms=0),
-        }
+            fast_query: ProviderResult(success=True, provider="stub", evidence=[fast_ev], latency_ms=0),
+            slow_query: ProviderResult(success=True, provider="stub", evidence=[slow_ev], latency_ms=0),
+        },
+        delays={slow_query: 0.4},  # well past the 0.15s round-2 budget
     )
-    service = MultiClaimVerificationService(SETTINGS, claim_decomposer=StubClaimDecomposer([claim]), evidence_provider=provider)
-
-    # 3 time.monotonic() calls expected: deadline calc, round-2 iteration 1
-    # check (before deadline), round-2 iteration 2 check (past deadline).
-    clock = iter([1000.0, 1000.0, 1020.0])
-    monkeypatch.setattr(time, "monotonic", lambda: next(clock))
+    service = MultiClaimVerificationService(settings, claim_decomposer=StubClaimDecomposer([claim]), evidence_provider=provider)
 
     plan = service.verify(claim.original_text).claims[0]
 
     assert plan.rounds == 2
-    assert second_followup_query not in provider.calls  # skipped due to timeout
-    assert first_followup_query in provider.calls  # first one still ran
+    assert fast_query in provider.calls
+    assert slow_query in provider.calls  # it did start (concurrently) -- just didn't finish in time
+    assert "https://c.example/1" in {item.url for item in plan.matrix.supporting}  # fast result kept
+    assert "https://d.example/1" not in {item.url for item in plan.matrix.supporting}  # slow result excluded
     assert any("timed out" in error for error in plan.provider_errors)
-    assert GAP_NO_OFFICIAL_SOURCE in plan.matrix.unresolved  # never got its retry
+    assert GAP_NO_OFFICIAL_SOURCE in plan.matrix.unresolved  # the slow query's gap never got filled
 
 
 def test_no_third_round_is_ever_attempted():
