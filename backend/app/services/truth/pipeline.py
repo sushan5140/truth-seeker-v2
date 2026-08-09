@@ -8,10 +8,21 @@ from app.services.truth.cache import ClaimCache
 from app.services.truth.evidence_processing import EvidenceDeduplicator, make_claim_id
 from app.services.truth.evidence_providers import EvidenceProvider, EvidenceSearchContext, create_evidence_provider
 from app.services.truth.extractors import WebExtractor, create_extractor
+from app.services.truth.nemotron_verifier import NemotronVerifier
 from app.services.truth.providers import SearchProvider, create_search_provider
 from app.services.truth.ranking import RankedSource, rank_evidence
 from app.services.truth.verification_models import ProcessedClaim, VerificationModel
 from app.services.truth.verifier import GeminiEvidenceVerifier, normalize_claim
+
+
+def create_verifier(settings: TruthSettings) -> VerificationModel:
+    """Gemini remains the default verifier; Nemotron/OpenRouter only
+    activates once both OPENROUTER_API_KEY and TRUTHSEEKER_VERIFIER_MODEL
+    are configured, per the Phase 2 handoff instructions."""
+    nemotron = NemotronVerifier(settings)
+    if nemotron.configured:
+        return nemotron
+    return GeminiEvidenceVerifier(settings)
 
 
 class ClaimVerificationService:
@@ -28,7 +39,7 @@ class ClaimVerificationService:
         self.settings = settings
         self.search_provider = search_provider or create_search_provider(settings)
         self.extractor = extractor or create_extractor(settings, self.search_provider.name)
-        self.verifier = verifier or GeminiEvidenceVerifier(settings)
+        self.verifier = verifier or create_verifier(settings)
         self.evidence_provider = evidence_provider or create_evidence_provider(settings, self.search_provider, self.extractor)
         self.deduplicator = EvidenceDeduplicator()
         self.cache = cache or ClaimCache(settings.cache_path)
@@ -38,6 +49,10 @@ class ClaimVerificationService:
     def status(self) -> TruthStatusResponse:
         return TruthStatusResponse(
             backend_status="running",
+            # TODO(phase3): field name is stale now that the verifier is
+            # provider-neutral -- reports the active verifier's configured
+            # state, not specifically Gemini's. Left as-is in Phase 2 to
+            # avoid a response-schema change; rename deliberately later.
             gemini_configured=self.verifier.configured,
             search_provider_configured=self.search_provider.name,
             extraction_provider_configured=self.extractor.name,
@@ -158,6 +173,11 @@ class ClaimVerificationService:
                 summary=assessment.summary,
                 limitations=limitations + ["The verdict is limited to the retrieved passages and sources shown."],
                 evidence=evidence,
+                # TODO(phase3): hardcoded "gemini" regardless of which VerificationModel
+                # actually ran (see create_verifier() above) -- harmless while Nemotron
+                # stays unconfigured everywhere, but misreports the verifier once it's
+                # ever turned on. Should read from self.verifier instead; deferred so
+                # this Phase 2 commit doesn't change ClaimResponse.provider.verifier values.
                 provider=self._provider_info("gemini"),
                 cached=False,
                 checked_at=datetime.now(timezone.utc),

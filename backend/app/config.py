@@ -35,6 +35,8 @@ class TruthSettings:
     verifier_model: str | None = os.getenv("TRUTHSEEKER_VERIFIER_MODEL", "").strip() or None
     embedding_model: str | None = os.getenv("TRUTHSEEKER_EMBEDDING_MODEL", "").strip() or None
     reranker_model: str | None = os.getenv("TRUTHSEEKER_RERANKER_MODEL", "").strip() or None
+    openrouter_base_url: str | None = os.getenv("OPENROUTER_BASE_URL", "").strip() or None
+    openrouter_timeout_seconds: float = float(os.getenv("TRUTH_OPENROUTER_TIMEOUT_SECONDS", "8"))
     user_agent: str = "TruthToneGuardian/2.0 (+local research assistant)"
 
 
