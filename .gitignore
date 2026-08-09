@@ -7,3 +7,4 @@ __pycache__/
 work/
 backend/data/*.sqlite3
 backend/data/*.sqlite3-*
+.claude/*.local.json
