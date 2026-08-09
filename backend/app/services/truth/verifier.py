@@ -6,8 +6,10 @@ from google import genai
 from google.genai import types
 
 from app.config import TruthSettings
-from app.models import GeminiClaimExtraction, GeminiEvidenceAssessment
+from app.models import GeminiClaimExtraction, GeminiEvidenceAssessment, GeminiMatrixAssessment
+from app.services.truth.domain import AtomicClaim, ClaimEvidenceMatrix, VerificationResult
 from app.services.truth.ranking import RankedSource
+from app.services.truth.verdict_generation import MATRIX_SYSTEM_INSTRUCTION, build_matrix_payload, to_verification_result
 from app.services.truth.verification_models import ProcessedClaim, VerificationModel
 
 
@@ -114,3 +116,21 @@ class GeminiEvidenceVerifier(VerificationModel):
         if len(parsed.source_stances) != len(evidence):
             raise ValueError("Gemini returned the wrong number of source stances")
         return parsed
+
+    def assess_matrix(self, claim: AtomicClaim, matrix: ClaimEvidenceMatrix, *, rounds: int) -> VerificationResult:
+        if not self.configured:
+            raise RuntimeError("Gemini is not configured")
+        payload = build_matrix_payload(claim, matrix, rounds)
+        response = self._client().models.generate_content(
+            model=GEMINI_MODEL,
+            contents=json.dumps(payload, ensure_ascii=False),
+            config=types.GenerateContentConfig(
+                system_instruction=MATRIX_SYSTEM_INSTRUCTION,
+                response_mime_type="application/json",
+                response_schema=GeminiMatrixAssessment,
+                temperature=0,
+                max_output_tokens=400,
+            ),
+        )
+        parsed = response.parsed if isinstance(response.parsed, GeminiMatrixAssessment) else GeminiMatrixAssessment.model_validate(response.parsed)
+        return to_verification_result(claim, matrix, parsed, verifier_used="gemini")

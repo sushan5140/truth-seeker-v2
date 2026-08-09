@@ -3,6 +3,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
 
+from app.services.truth.domain import InternalVerdict
+
 
 ToneSensitivity = Literal["low", "balanced", "high"]
 Verdict = Literal["supported", "contradicted", "mixed", "insufficient_evidence", "opinion", "invalid"]
@@ -121,3 +123,14 @@ class GeminiEvidenceAssessment(BaseModel):
     confidence: Confidence
     summary: str
     source_stances: list[EvidenceStance]
+
+
+class GeminiMatrixAssessment(BaseModel):
+    """Structured model output for /api/v2/verify's claim-evidence-matrix
+    verdict (Phase 7). Shared by GeminiEvidenceVerifier and NemotronVerifier
+    -- same naming precedent as GeminiEvidenceAssessment already being reused
+    by NemotronVerifier.compare() since Phase 2."""
+
+    verdict: InternalVerdict
+    rationale: str = Field(min_length=1, max_length=4000)
+    confidence_score: float | None = Field(default=None, ge=0, le=1)

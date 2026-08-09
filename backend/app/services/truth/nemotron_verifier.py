@@ -2,9 +2,11 @@ import json
 import os
 
 from app.config import TruthSettings
-from app.models import GeminiClaimExtraction, GeminiEvidenceAssessment
+from app.models import GeminiClaimExtraction, GeminiEvidenceAssessment, GeminiMatrixAssessment
+from app.services.truth.domain import AtomicClaim, ClaimEvidenceMatrix, VerificationResult
 from app.services.truth.openrouter_client import OpenRouterClient, OpenRouterError
 from app.services.truth.ranking import RankedSource
+from app.services.truth.verdict_generation import MATRIX_SYSTEM_INSTRUCTION, build_matrix_payload, to_verification_result
 from app.services.truth.verification_models import ProcessedClaim, VerificationModel
 from app.services.truth.verifier import local_claim_processing
 
@@ -78,3 +80,16 @@ class NemotronVerifier(VerificationModel):
         if len(assessment.source_stances) != len(evidence):
             raise ValueError("Nemotron returned the wrong number of source stances")
         return assessment
+
+    def assess_matrix(self, claim: AtomicClaim, matrix: ClaimEvidenceMatrix, *, rounds: int) -> VerificationResult:
+        if not self.configured:
+            raise RuntimeError("Nemotron/OpenRouter verifier is not configured")
+        payload = build_matrix_payload(claim, matrix, rounds)
+        parsed = self.client.complete_json(
+            model=self.model,
+            system=MATRIX_SYSTEM_INSTRUCTION,
+            user=json.dumps(payload, ensure_ascii=False),
+            response_schema=GeminiMatrixAssessment,
+            timeout=self.settings.openrouter_timeout_seconds,
+        )
+        return to_verification_result(claim, matrix, parsed, verifier_used=self.model)

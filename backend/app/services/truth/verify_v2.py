@@ -11,7 +11,10 @@ from app.services.truth.evidence_matrix import build_claim_audit
 from app.services.truth.evidence_processing import EvidenceDeduplicator
 from app.services.truth.evidence_providers import EvidenceProvider, EvidenceSearchContext, create_evidence_provider
 from app.services.truth.extractors import WebExtractor, create_extractor
+from app.services.truth.pipeline import create_verifier
 from app.services.truth.providers import SearchProvider, create_search_provider
+from app.services.truth.verdict_generation import PublicVerdict, generate_verdict, to_public_verdict
+from app.services.truth.verification_models import VerificationModel
 
 
 class VerifyRequest(BaseModel):
@@ -48,13 +51,23 @@ class ClaimEvidenceMatrixOut(BaseModel):
     unresolved: list[str]
 
 
-class ClaimVerificationPlan(BaseModel):
-    """Evidence-gathering and evidence-auditing result for one atomic claim.
+class VerdictOut(BaseModel):
+    """verdict is the simple public vocabulary (handoff doc section 10.5's
+    backward-compat mapping); internal_verdict is the richer domain.py
+    InternalVerdict this collapsed from, kept for transparency/debugging.
+    No citation validation yet (Phase 8) -- rationale may reference evidence
+    but isn't yet strictly checked against it."""
 
-    Deliberately has no verdict field -- Phase 5 groups and scores evidence
-    (claim-evidence matrix, gap analysis, source-quality signals); reasoning
-    that evidence into a verdict is later phase scope (verification engine).
-    """
+    verdict: PublicVerdict
+    internal_verdict: str
+    rationale: str
+    confidence_score: float | None
+    verifier: str
+
+
+class ClaimVerificationPlan(BaseModel):
+    """Evidence-gathering, evidence-auditing, and verdict result for one
+    atomic claim."""
 
     claim_id: str
     original_text: str
@@ -70,6 +83,7 @@ class ClaimVerificationPlan(BaseModel):
     matrix: ClaimEvidenceMatrixOut
     source_quality: SourceQualitySignals
     classifier: str
+    verdict: VerdictOut
     provider: str
     provider_errors: list[str]
 
@@ -110,6 +124,7 @@ class MultiClaimVerificationService:
         extractor: WebExtractor | None = None,
         evidence_provider: EvidenceProvider | None = None,
         classifier: EvidenceClassifier | None = None,
+        verifier: VerificationModel | None = None,
     ):
         self.settings = settings
         self.claim_decomposer = claim_decomposer or ClaimDecomposer(settings)
@@ -118,6 +133,10 @@ class MultiClaimVerificationService:
         self.evidence_provider = evidence_provider or create_evidence_provider(settings, resolved_search_provider, resolved_extractor)
         self.deduplicator = EvidenceDeduplicator()
         self.classifier = classifier or EvidenceClassifier(settings)
+        # Reuses Phase 1/2's exact selection logic: Nemotron when configured,
+        # Gemini otherwise -- same gating as ClaimVerificationService, nothing
+        # new invented here.
+        self.verifier = verifier or create_verifier(settings)
 
     def verify(self, text: str, language: str = "en") -> VerifyResponse:
         claims = self.claim_decomposer.decompose(text)
@@ -197,6 +216,15 @@ class MultiClaimVerificationService:
             unresolved=audit.matrix.unresolved,
         )
 
+        verification = generate_verdict(claim, audit.matrix, rounds, self.verifier)
+        verdict_out = VerdictOut(
+            verdict=to_public_verdict(verification.verdict),
+            internal_verdict=verification.verdict,
+            rationale=verification.rationale,
+            confidence_score=verification.confidence_score,
+            verifier=str(verification.metadata.get("verifier_used", "heuristic_fallback")),
+        )
+
         return ClaimVerificationPlan(
             claim_id=claim.claim_id,
             original_text=claim.original_text,
@@ -218,6 +246,7 @@ class MultiClaimVerificationService:
                 duplicate_evidence_removed_count=audit.source_quality.duplicate_evidence_removed_count,
             ),
             classifier=audit.classifier_name,
+            verdict=verdict_out,
             provider=self.evidence_provider.name,
             provider_errors=errors,
         )
