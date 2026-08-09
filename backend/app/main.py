@@ -8,6 +8,7 @@ from fastapi.responses import JSONResponse
 from app.models import ClaimRequest, ClaimResponse, ToneRequest, ToneResponse, TruthStatusResponse
 from app.services.tone_checker import check_tone, is_gemini_configured
 from app.services.truth.pipeline import ClaimVerificationService
+from app.services.truth.verify_v2 import MultiClaimVerificationService, VerifyRequest, VerifyResponse
 
 
 async def validation_error_handler(_request: Request, exc: RequestValidationError) -> JSONResponse:
@@ -35,9 +36,27 @@ def get_truth_service(request: Request) -> ClaimVerificationService:
 TruthServiceDependency = Annotated[ClaimVerificationService, Depends(get_truth_service)]
 
 
-def create_app(service: ClaimVerificationService | None = None) -> FastAPI:
+def get_verify_service(request: Request) -> MultiClaimVerificationService:
+    """Same lazy app-scoped pattern as get_truth_service, kept separate
+    so /api/v2/verify can be tested/injected without touching the v1
+    ClaimVerificationService singleton."""
+    service = request.app.state.verify_service
+    if service is None:
+        service = MultiClaimVerificationService()
+        request.app.state.verify_service = service
+    return service
+
+
+VerifyServiceDependency = Annotated[MultiClaimVerificationService, Depends(get_verify_service)]
+
+
+def create_app(
+    service: ClaimVerificationService | None = None,
+    verify_service: MultiClaimVerificationService | None = None,
+) -> FastAPI:
     application = FastAPI(title="Truth & Tone Guardian", version="2.0.0")
     application.state.truth_service = service
+    application.state.verify_service = verify_service
     application.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],
@@ -71,6 +90,10 @@ def create_app(service: ClaimVerificationService | None = None) -> FastAPI:
     @application.post("/api/check-tone", response_model=ToneResponse)
     def tone_endpoint(request: ToneRequest) -> ToneResponse:
         return check_tone(request.text, request.sensitivity)
+
+    @application.post("/api/v2/verify", response_model=VerifyResponse)
+    def verify_endpoint(request: VerifyRequest, active_service: VerifyServiceDependency) -> VerifyResponse:
+        return active_service.verify(request.text, request.language)
 
     return application
 

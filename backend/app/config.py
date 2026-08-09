@@ -37,6 +37,7 @@ class TruthSettings:
     reranker_model: str | None = os.getenv("TRUTHSEEKER_RERANKER_MODEL", "").strip() or None
     openrouter_base_url: str | None = os.getenv("OPENROUTER_BASE_URL", "").strip() or None
     openrouter_timeout_seconds: float = float(os.getenv("TRUTH_OPENROUTER_TIMEOUT_SECONDS", "8"))
+    max_queries_per_claim: int = _positive_int("TRUTH_MAX_QUERIES_PER_CLAIM", 6)
     user_agent: str = "TruthToneGuardian/2.0 (+local research assistant)"
 
 
