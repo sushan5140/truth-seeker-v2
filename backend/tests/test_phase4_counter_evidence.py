@@ -13,6 +13,8 @@ from app.services.truth.evidence_providers import EvidenceProvider
 from app.services.truth.verify_v2 import MultiClaimVerificationService
 
 
+# Credential-safety fixture now lives in tests/conftest.py (session-wide autouse).
+
 RETRIEVED_AT = datetime(2026, 8, 9, tzinfo=timezone.utc)
 
 
@@ -283,7 +285,9 @@ def test_verify_endpoint_returns_multi_claim_plan():
     assert body["multiple_claims_detected"] is True
     assert len(body["claims"]) == 2
     assert body["claims"][0]["claim_type"] == "factual"
-    assert "verdict" not in body["claims"][0]
+    # Phase 4 predates verdict generation (Phase 7); this test only cares
+    # about multi-claim retrieval, so just sanity-check verdict exists now.
+    assert "verdict" in body["claims"][0]
 
 
 def test_verify_endpoint_rejects_empty_text():

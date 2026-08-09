@@ -158,6 +158,7 @@ def test_keyword_only_or_incomplete_text_remains_silent(client, message):
     assert response.json()["intervention_needed"] is False
 
 
+@pytest.mark.needs_real_gemini_key
 def test_valid_gemini_structured_response(client, monkeypatch):
     result = GeminiToneResult(
         intervention_needed=True,
@@ -176,6 +177,7 @@ def test_valid_gemini_structured_response(client, monkeypatch):
     assert data["confidence"] == "high"
 
 
+@pytest.mark.needs_real_gemini_key
 def test_gemini_normal_disagreement_stays_silent(client, monkeypatch):
     message = "I don’t think this approach will work because it is too expensive."
     result = GeminiToneResult(
@@ -269,6 +271,7 @@ def test_invalid_sensitivity_is_rejected(client):
     assert response.status_code == 422
 
 
+@pytest.mark.needs_real_gemini_key
 def test_selected_sensitivity_is_sent_to_gemini(client, monkeypatch):
     observed = {}
     result = GeminiToneResult(

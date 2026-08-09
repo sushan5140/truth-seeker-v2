@@ -2,7 +2,6 @@ from dataclasses import replace
 from datetime import datetime, timezone
 
 import httpx
-import pytest
 from fastapi.testclient import TestClient
 
 from app.config import SETTINGS
@@ -18,6 +17,9 @@ from app.services.truth.evidence_matrix import build_claim_audit
 from app.services.truth.evidence_processing import hash_evidence_content
 from app.services.truth.evidence_providers import EvidenceProvider
 from app.services.truth.verify_v2 import MultiClaimVerificationService
+
+
+# Credential-safety fixture now lives in tests/conftest.py (session-wide autouse).
 
 
 RETRIEVED_AT = datetime(2026, 8, 9, tzinfo=timezone.utc)
@@ -396,7 +398,7 @@ def test_verify_end_to_end_populates_matrix_and_source_quality():
     assert plan.classifier == "heuristic"
 
 
-def test_verify_endpoint_response_shape_has_matrix_no_verdict():
+def test_verify_endpoint_response_shape_has_matrix_verdict_not_nested_inside_it():
     claim = _claim()
     provider = StubEvidenceProvider()
     service = MultiClaimVerificationService(SETTINGS, claim_decomposer=StubClaimDecomposer([claim]), evidence_provider=provider)
@@ -409,5 +411,7 @@ def test_verify_endpoint_response_shape_has_matrix_no_verdict():
     assert set(plan["matrix"].keys()) == {"supporting", "contradicting", "context", "unresolved"}
     assert "source_quality" in plan
     assert "classifier" in plan
-    assert "verdict" not in plan
+    # Phase 5 predates verdict generation (Phase 7); verdict now lives at
+    # the plan level, not nested inside the matrix -- that part still holds.
+    assert "verdict" in plan
     assert "verdict" not in plan["matrix"]

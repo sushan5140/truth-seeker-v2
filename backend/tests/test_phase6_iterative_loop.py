@@ -22,6 +22,9 @@ from app.services.truth.evidence_providers import EvidenceProvider
 from app.services.truth.verify_v2 import MultiClaimVerificationService
 
 
+# Credential-safety fixture now lives in tests/conftest.py (session-wide autouse).
+
+
 RETRIEVED_AT = datetime(2026, 8, 9, tzinfo=timezone.utc)
 
 
@@ -291,4 +294,5 @@ def test_verify_endpoint_exposes_rounds_and_followup_queries():
     assert "rounds" in plan
     assert "followup_queries" in plan
     assert plan["rounds"] == 2  # nothing answered at all -> every gap fires -> second round attempted
-    assert "verdict" not in plan
+    # Phase 6 predates verdict generation (Phase 7); sanity-check it's there now.
+    assert "verdict" in plan
