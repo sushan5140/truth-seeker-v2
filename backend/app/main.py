@@ -8,6 +8,7 @@ from fastapi.responses import JSONResponse
 from app.models import ClaimRequest, ClaimResponse, ToneRequest, ToneResponse, TruthStatusResponse
 from app.services.tone_checker import check_tone, is_gemini_configured
 from app.services.truth.pipeline import ClaimVerificationService
+from app.services.truth.quick_ask import QuickAskRequest, QuickAskResponse, QuickAskService
 from app.services.truth.verify_v2 import MultiClaimVerificationService, VerifyRequest, VerifyResponse
 
 
@@ -50,13 +51,28 @@ def get_verify_service(request: Request) -> MultiClaimVerificationService:
 VerifyServiceDependency = Annotated[MultiClaimVerificationService, Depends(get_verify_service)]
 
 
+def get_quick_ask_service(request: Request) -> QuickAskService:
+    """Same lazy app-scoped pattern as get_truth_service/get_verify_service,
+    kept separate so /api/v2/quick-ask can be tested/injected on its own."""
+    service = request.app.state.quick_ask_service
+    if service is None:
+        service = QuickAskService()
+        request.app.state.quick_ask_service = service
+    return service
+
+
+QuickAskServiceDependency = Annotated[QuickAskService, Depends(get_quick_ask_service)]
+
+
 def create_app(
     service: ClaimVerificationService | None = None,
     verify_service: MultiClaimVerificationService | None = None,
+    quick_ask_service: QuickAskService | None = None,
 ) -> FastAPI:
     application = FastAPI(title="Truth & Tone Guardian", version="2.0.0")
     application.state.truth_service = service
     application.state.verify_service = verify_service
+    application.state.quick_ask_service = quick_ask_service
     application.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],
@@ -94,6 +110,10 @@ def create_app(
     @application.post("/api/v2/verify", response_model=VerifyResponse)
     def verify_endpoint(request: VerifyRequest, active_service: VerifyServiceDependency) -> VerifyResponse:
         return active_service.verify(request.text, request.language)
+
+    @application.post("/api/v2/quick-ask", response_model=QuickAskResponse)
+    def quick_ask_endpoint(request: QuickAskRequest, active_service: QuickAskServiceDependency) -> QuickAskResponse:
+        return active_service.ask(request.text)
 
     return application
 

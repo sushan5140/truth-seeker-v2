@@ -4,8 +4,8 @@ body { width: 390px; min-height: 510px; margin: 0; }
 header { display: flex; gap: 12px; align-items: center; padding: 18px 20px; color: white; background: linear-gradient(135deg, #173b68, #236a79); }
 .mark { display: grid; place-items: center; width: 44px; height: 44px; border-radius: 13px; font-weight: 800; background: rgba(255,255,255,.18); }
 h1 { margin: 0; font-size: 18px; } header p { margin: 3px 0 0; color: #dceaf0; font-size: 12px; }
-nav { display: grid; grid-template-columns: 1fr 1fr; background: white; border-bottom: 1px solid #dfe5ee; }
-.tab { padding: 13px; border: 0; border-bottom: 3px solid transparent; color: #59677c; background: transparent; font-weight: 700; cursor: pointer; }
+nav { display: grid; grid-template-columns: repeat(5, 1fr); background: white; border-bottom: 1px solid #dfe5ee; }
+.tab { padding: 9px 3px; border: 0; border-bottom: 3px solid transparent; color: #59677c; background: transparent; font-weight: 700; font-size: 11px; line-height: 1.3; cursor: pointer; }
 .tab.active { color: #17636f; border-bottom-color: #1b8794; }
 main { padding: 18px; }
 .connection-card { margin-bottom: 14px; padding: 11px 12px; border: 1px solid #d8e0ea; border-radius: 9px; background: white; font-size: 12px; }
@@ -45,4 +45,41 @@ button:disabled { opacity: .55; cursor: wait; }
 .popup-evidence p { margin: 6px 0; }
 .popup-evidence button { padding: 6px 9px; }
 #tone-suggestion { min-height: 82px; margin-bottom: 9px; background: #f9fbfc; }
+
+/* Deep Check */
+#deep-results .result + .result { margin-top: 12px; }
+.badge-true { color: #1c6b3f; background: #dcf3e3; }
+.badge-false { color: #9c3a30; background: #fbe0dd; }
+.badge-misleading { color: #8a5a08; background: #fdecc8; }
+.badge-insufficient { color: #43506b; background: #e4e9f2; }
+.deep-rationale { font-size: 13px; line-height: 1.45; }
+.evidence-group { margin-top: 10px; border-radius: 8px; overflow: hidden; }
+.evidence-group summary { list-style: none; cursor: pointer; padding: 8px 10px; border-radius: 8px; font-weight: 700; font-size: 12px; }
+.evidence-group summary::-webkit-details-marker { display: none; }
+.evidence-group[open] summary { border-radius: 8px 8px 0 0; }
+.evidence-group .popup-evidence { margin: 9px; }
+.evidence-group .empty-note { margin: 9px; color: #68758a; font-size: 12px; }
+.evidence-group.supporting summary { color: #1c6b3f; background: #e3f5ea; }
+.evidence-group.contradicting summary { color: #9c3a30; background: #fbe4e1; }
+.evidence-group.context summary { color: #435068; background: #e9edf5; }
+.source-quality-line { margin: 8px 0 0; color: #68758a; font-size: 11px; }
+.round-note { margin: 6px 0 0; color: #738095; font-size: 11px; font-style: italic; }
+
+/* Quick Ask -- deliberately chat-bubble styled, not a report card, so it
+   never reads like Deep Check's validated verdict output. */
+.chat-answer { margin-top: 4px; padding: 14px 16px; border-radius: 16px; border: 1px solid #dbe6d9; background: #eef6ec; }
+.chat-answer p { margin: 0; font-size: 13px; line-height: 1.5; color: #223420; }
+.quickask-sources-heading { display: block; margin-top: 12px; color: #52604f; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
+.quickask-source-link { display: block; width: auto; margin-top: 6px; padding: 0; border: 0; background: none; color: #2a6b3f; font-weight: 600; text-decoration: underline; text-align: left; word-break: break-all; cursor: pointer; }
+.quickask-source-link:hover { color: #1c4c2b; }
+
+/* Live Check */
+.live-controls { display: flex; gap: 10px; margin-top: 4px; }
+.live-controls button { flex: 1; }
+.transcript-box { margin-top: 12px; padding: 12px; border: 1px solid #d8e0ea; border-radius: 10px; background: white; }
+.transcript-live-indicator { display: flex; align-items: center; gap: 7px; margin-bottom: 8px; color: #59677c; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .03em; }
+.connection-dot.listening { background: #21875b; animation: live-pulse 1.6s ease-in-out infinite; }
+@keyframes live-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
+.transcript-text { max-height: 260px; margin: 0; overflow-y: auto; white-space: pre-wrap; font-size: 13px; line-height: 1.5; color: #223420; }
+.transcript-text:empty::before { content: "Listening for speech…"; color: #9aa5b4; font-style: italic; }
 .hidden { display: none; }

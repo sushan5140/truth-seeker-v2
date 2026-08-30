@@ -3,8 +3,37 @@ const PRIMARY_BACKEND = "http://127.0.0.1:8000";
 const LOCALHOST_BACKEND = "http://localhost:8000";
 const REQUEST_TIMEOUT_MS = 10_000;
 const CLAIM_TIMEOUT_MS = 22_000;
+// /api/v2/verify runs decomposition, counter-evidence retrieval, evidence
+// classification, and a live Gemini call per claim (more for multi-claim
+// text) -- a much heavier pipeline than /api/check-claim, so it gets its
+// own, longer budget rather than sharing CLAIM_TIMEOUT_MS.
+const DEEP_CHECK_TIMEOUT_MS = 90_000;
+// Quick Ask's OpenRouter call can involve multiple server-side
+// web_search/web_fetch round-trips before a final answer comes back --
+// its own budget too, not shared with Deep Check's.
+const QUICK_ASK_TIMEOUT_MS = 60_000;
+const OFFSCREEN_DOCUMENT_URL = "offscreen.html";
 const claimControllers = new Map();
 const recentClaimResponses = new Map();
+// Guards against a second LIVE_CHECK_START racing a capture already in
+// flight -- unlike the stateless HTTP tabs, background.js can hold real
+// session state here, so this gets the in-flight guard those tabs don't.
+let liveCheckSession = null;
+
+// Temporary diagnostic instrumentation, mirroring offscreen.js's, for the
+// ~30s auto-stop bug -- logs every Live Check message this service worker
+// sees and every offscreen-document lifecycle action it takes. A fresh
+// "service worker (re)evaluated" line appearing mid-session is itself a
+// finding: it means Chrome killed and respawned this service worker,
+// which would reset liveCheckSession back to null.
+const LOG_PREFIX = "[LiveCheck background]";
+function log(...args) {
+  console.log(LOG_PREFIX, `t+${Math.round(performance.now())}ms`, ...args);
+}
+function logError(...args) {
+  console.error(LOG_PREFIX, `t+${Math.round(performance.now())}ms`, ...args);
+}
+log("service worker (re)evaluated -- module top-level code just ran");
 
 chrome.runtime.onInstalled.addListener(async () => {
   const saved = await chrome.storage.local.get(["automaticToneGuard", "toneSensitivity"]);
@@ -127,6 +156,102 @@ async function checkClaim(message) {
   }
 }
 
+async function checkDeep(message) {
+  const text = typeof message.text === "string" ? message.text.trim() : "";
+  if (text.length < 12 || text.length > 5000) return failure("INVALID_DEEP_CHECK", "Enter text between 12 and 5,000 characters.");
+  const result = await fetchJson(`${PRIMARY_BACKEND}/api/v2/verify`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ text, language: message.language || "en" }),
+  }, DEEP_CHECK_TIMEOUT_MS);
+  if (!result.ok) return result;
+  if (!result.data || !Array.isArray(result.data.claims)) {
+    return failure("INVALID_DEEP_RESPONSE", "The deep check endpoint returned an unexpected response.");
+  }
+  return { ok: true, data: result.data };
+}
+
+async function checkQuickAsk(message) {
+  const text = typeof message.text === "string" ? message.text.trim() : "";
+  if (text.length < 4 || text.length > 5000) return failure("INVALID_QUICK_ASK", "Enter a question between 4 and 5,000 characters.");
+  const result = await fetchJson(`${PRIMARY_BACKEND}/api/v2/quick-ask`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ text }),
+  }, QUICK_ASK_TIMEOUT_MS);
+  if (!result.ok) return result;
+  if (!result.data || typeof result.data.available !== "boolean" || typeof result.data.answer !== "string" || !Array.isArray(result.data.sources)) {
+    return failure("INVALID_QUICK_ASK_RESPONSE", "The Quick Ask endpoint returned an unexpected response.");
+  }
+  return { ok: true, data: result.data };
+}
+
+async function ensureOffscreenDocument() {
+  const existing = await chrome.runtime.getContexts({ contextTypes: ["OFFSCREEN_DOCUMENT"] });
+  log("ensureOffscreenDocument: getContexts found", existing.length, "existing offscreen document(s)");
+  if (existing.length > 0) return;
+  await chrome.offscreen.createDocument({
+    url: OFFSCREEN_DOCUMENT_URL,
+    reasons: ["USER_MEDIA"],
+    justification: "Capture and transcribe the active tab's audio for Live Check.",
+  });
+  log("ensureOffscreenDocument: createDocument() completed");
+}
+
+async function closeOffscreenDocumentIfOpen() {
+  log("closeOffscreenDocumentIfOpen() called");
+  try {
+    const existing = await chrome.runtime.getContexts({ contextTypes: ["OFFSCREEN_DOCUMENT"] });
+    log("closeOffscreenDocumentIfOpen: getContexts found", existing.length, "existing offscreen document(s)");
+    if (existing.length > 0) {
+      await chrome.offscreen.closeDocument();
+      log("closeOffscreenDocumentIfOpen: closeDocument() completed");
+    }
+  } catch (error) {
+    logError("closeOffscreenDocumentIfOpen: threw", error?.name, error?.message);
+  }
+}
+
+async function startLiveCheck(message) {
+  log("startLiveCheck() called", { tabId: message.tabId });
+  if (typeof chrome.tabCapture?.getMediaStreamId !== "function" || typeof chrome.offscreen?.createDocument !== "function") {
+    logError("startLiveCheck: tabCapture/offscreen API unavailable");
+    return failure("LIVE_CHECK_UNSUPPORTED", "This browser does not support tab audio capture.");
+  }
+  if (liveCheckSession) {
+    log("startLiveCheck: rejected, session already active", liveCheckSession);
+    return failure("LIVE_CHECK_ALREADY_ACTIVE", "Live Check is already listening to a tab.");
+  }
+  const tabId = message.tabId;
+  if (!Number.isInteger(tabId)) {
+    log("startLiveCheck: rejected, invalid tabId");
+    return failure("INVALID_LIVE_CHECK_TAB", "No active tab to listen to.");
+  }
+  try {
+    await ensureOffscreenDocument();
+    const streamId = await chrome.tabCapture.getMediaStreamId({ targetTabId: tabId });
+    log("startLiveCheck: got streamId, relaying to offscreen", { streamId });
+    liveCheckSession = { tabId };
+    chrome.runtime.sendMessage({ type: "LIVE_CHECK_OFFSCREEN_START", target: "offscreen", streamId }).catch((error) => {
+      logError("startLiveCheck: relay sendMessage rejected", error?.message);
+    });
+    return { ok: true };
+  } catch (error) {
+    logError("startLiveCheck: threw", error?.name, error?.message);
+    liveCheckSession = null;
+    return failure("LIVE_CHECK_START_FAILED", error?.message || "Could not start capturing this tab's audio.");
+  }
+}
+
+async function stopLiveCheck() {
+  log("stopLiveCheck() called (explicit user stop)", { previousSession: liveCheckSession });
+  liveCheckSession = null;
+  chrome.runtime.sendMessage({ type: "LIVE_CHECK_OFFSCREEN_STOP", target: "offscreen" }).catch((error) => {
+    logError("stopLiveCheck: relay sendMessage rejected", error?.message);
+  });
+  return { ok: true };
+}
+
 async function runSelfTest() {
   const health127 = await fetchJson(`${PRIMARY_BACKEND}/health`);
   const healthLocalhost = await fetchJson(`${LOCALHOST_BACKEND}/health`);
@@ -156,6 +281,36 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       sendResponse(failure(code, code === "CLAIM_CANCELLED" ? "Claim check cancelled." : "The claim check failed."));
     });
     return true;
+  }
+  if (message?.type === "DEEP_CHECK") {
+    checkDeep(message).then(sendResponse).catch(() => sendResponse(failure("DEEP_WORKER_ERROR", "The deep check failed.")));
+    return true;
+  }
+  if (message?.type === "QUICK_ASK") {
+    checkQuickAsk(message).then(sendResponse).catch(() => sendResponse(failure("QUICK_ASK_WORKER_ERROR", "Quick Ask failed.")));
+    return true;
+  }
+  if (message?.type === "LIVE_CHECK_START") {
+    startLiveCheck(message).then(sendResponse).catch(() => sendResponse(failure("LIVE_CHECK_WORKER_ERROR", "Live Check failed to start.")));
+    return true;
+  }
+  if (message?.type === "LIVE_CHECK_STOP") {
+    stopLiveCheck().then(sendResponse).catch(() => sendResponse(failure("LIVE_CHECK_WORKER_ERROR", "Live Check failed to stop.")));
+    return true;
+  }
+  if (message?.type === "LIVE_CHECK_GET_STATE") {
+    log("LIVE_CHECK_GET_STATE queried", { listening: liveCheckSession !== null });
+    sendResponse({ ok: true, listening: liveCheckSession !== null });
+    return false;
+  }
+  if (message?.type === "LIVE_CHECK_ENDED" || message?.type === "LIVE_CHECK_ERROR") {
+    // Broadcast from the offscreen document (not targeted at "offscreen"
+    // itself) -- popup.js reacts to the same message for its own UI/
+    // transcript update; this listener only clears orchestration state.
+    log(`received ${message.type}`, message);
+    liveCheckSession = null;
+    closeOffscreenDocumentIfOpen();
+    return false;
   }
   if (message?.type === "CANCEL_CLAIM") {
     claimControllers.get(message.requestId)?.abort();

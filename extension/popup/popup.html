@@ -14,6 +14,9 @@
   <nav aria-label="Tools">
     <button class="tab active" data-tab="claim" aria-selected="true">Claim Checker</button>
     <button class="tab" data-tab="tone" aria-selected="false">Tone Guard</button>
+    <button class="tab" data-tab="deep" aria-selected="false">Deep Check</button>
+    <button class="tab" data-tab="quickask" aria-selected="false">Quick Ask</button>
+    <button class="tab" data-tab="live" aria-selected="false">Live Check</button>
   </nav>
   <main>
     <section class="connection-card" aria-label="Backend connection status">
@@ -57,6 +60,37 @@
         <p><strong>Flagged phrase:</strong> <span id="tone-phrase"></span></p><p id="tone-explanation"></p>
         <label for="tone-suggestion">Suggested rewrite</label><textarea id="tone-suggestion" readonly></textarea>
         <button id="copy-button" class="secondary">Copy Suggestion</button>
+      </div>
+    </section>
+    <section id="deep-panel" class="panel hidden">
+      <div class="warning"><strong>Deep Check runs a multi-source evidence search per claim.</strong><br>Insufficient evidence never means false.</div>
+      <label for="deep-text">Text to deep-check</label>
+      <textarea id="deep-text" maxlength="5000" placeholder="Highlight a passage on a webpage, or type it here."></textarea>
+      <div class="row"><span id="deep-count">0 / 5,000</span><button id="deep-button">Deep Check</button></div>
+      <div id="deep-status" class="status" role="status"></div>
+      <div id="deep-results"></div>
+    </section>
+    <section id="quickask-panel" class="panel hidden">
+      <div class="warning quickask-disclaimer"><strong>Gemma's own answer with live web search</strong> — faster, but not evidence-validated like Deep Check.<br>For a rigorously checked answer, use Deep Check instead.</div>
+      <label for="quickask-text">Ask a question</label>
+      <textarea id="quickask-text" maxlength="5000" placeholder="Ask a quick factual question, or highlight one on a webpage."></textarea>
+      <div class="row"><span id="quickask-count">0 / 5,000</span><button id="quickask-button">Quick Ask</button></div>
+      <div id="quickask-status" class="status" role="status"></div>
+      <div id="quickask-result" class="chat-answer hidden">
+        <p id="quickask-answer"></p>
+        <div id="quickask-sources"></div>
+      </div>
+    </section>
+    <section id="live-panel" class="panel hidden">
+      <div class="warning"><strong>Live Check transcribes this tab's audio locally in your browser.</strong><br>Nothing is fact-checked yet in this phase -- this only proves live transcription works. No audio or text leaves your device.</div>
+      <div class="live-controls">
+        <button id="live-start-button">Start Listening</button>
+        <button id="live-stop-button" class="secondary" disabled>Stop Listening</button>
+      </div>
+      <div id="live-status" class="status" role="status"></div>
+      <div id="live-transcript-box" class="transcript-box hidden">
+        <div class="transcript-live-indicator"><span id="live-dot" class="connection-dot"></span><span id="live-indicator-text">Listening…</span></div>
+        <p id="live-transcript" class="transcript-text"></p>
       </div>
     </section>
   </main>

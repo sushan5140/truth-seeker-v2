@@ -41,6 +41,13 @@ class TruthSettings:
     classifier_model: str | None = os.getenv("TRUTHSEEKER_CLASSIFIER_MODEL", "").strip() or None
     second_round_timeout_seconds: float = float(os.getenv("TRUTH_SECOND_ROUND_TIMEOUT_SECONDS", "10"))
     max_concurrent_retrievals: int = _positive_int("TRUTH_MAX_CONCURRENT_RETRIEVALS", 6)
+    # Quick Ask's OpenRouter call can involve several server-side
+    # web_search/web_fetch round-trips before the model returns a final
+    # answer -- a much heavier single request than classify/decompose's
+    # openrouter_timeout_seconds, so it gets its own, longer budget rather
+    # than reusing that one (same lesson as CLAIM_TIMEOUT_MS vs. Deep
+    # Check's timeout on the extension side).
+    quick_ask_timeout_seconds: float = float(os.getenv("TRUTH_QUICK_ASK_TIMEOUT_SECONDS", "45"))
     user_agent: str = "TruthToneGuardian/2.0 (+local research assistant)"
 
 
